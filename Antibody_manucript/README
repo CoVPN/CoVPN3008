@@ -1,1 +1,6 @@
 This folder hosts R code necessary to reproduce the antibody correlates analysis in CoVPN 3008 Ubuntu Study.
+
+The RMD file coxph_nAb_Fig3_and_Tbl2.md reproduces the following results:
+1. 6-month follow-up Cox regression results in Figure 3 of the main article;
+2. Analysis of deviance results in Table 2 of the main article;
+3. Interaction test results in Supplemental Material Table 3.
