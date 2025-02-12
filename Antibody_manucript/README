@@ -10,3 +10,10 @@ The RMD file coxph_nAb_PLWH.md reproduces the following results:
 
 The RMD file coxph_nAb_Fig3_3months.md reproduces the following results:
 1. 3-month follow-up Cox regression results in Figure 3 of the main article.
+
+The RMD file NAb_ControlledRisk_NP_Fig4_SuppFig13.md reproduces the following results:
+1. 6-month follow-up controlled risk curves in Figure 4 of the main article;
+2. 6-month follow-up controlled risk curves in Supplemental Figure 13 of the main article.
+
+The RMD file NAb_ControlledRisk_NP_Fig4_3months.md reproduces the following results:
+1. 3-month follow-up controlled risk curves in Figure 4 of the main article.
