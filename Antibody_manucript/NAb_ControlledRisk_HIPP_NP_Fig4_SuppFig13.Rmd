@@ -1,0 +1,338 @@
+---
+title: "Coxph Report nAb"
+author: "CoVPN 3008"
+date: "2024-10-30"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Change the directory as needed
+setwd('Github/antibody_manuscript/Cox_HR_nAb/')
+set.seed(1)
+setwd("C:/Users/bzhang3/Dropbox/3008 correlates/manuscript/antibody_manuscript/NAb_curves/")
+```
+
+
+```{r load pckages, echo=FALSE, warning=FALSE, message=FALSE}
+library(CaseCohortCoxSurvival)
+library(survival)
+library(dplyr)
+library(survey)
+library(ggplot2)
+library(GGally)
+library(vaccine)
+library(wCorr)
+library(haven)
+library(Hmisc)
+source('CVE_functions.R')
+```
+
+
+# Data preprocessing
+
+```{r data wrangling, echo=FALSE}
+# Read in the processed dataset
+dt = read.csv('./COVID_realdata_ics_bama_nab_bcp20241210_processed_with_riskscore.csv')
+
+# Additional data processing
+# Define log10-transformed marker variables
+# If a participant is not in the phase-2 sample, then set the 
+# participant's immune marker to NA
+dt_serum_PP = dt %>%
+  filter(ph1.m1.sera == 1) %>%
+  mutate(hybrid = AGRP2N %in% c(2.1, 4.1) + 0) %>%
+  mutate(is.subcohort = ifelse(IMMFL == 'Y', 1, 0)) %>%
+  mutate(log10M1BA45ID50 = log10(M1BA45ID50),
+         log10BBA45ID50 = log10(BBA45ID50),
+         frBA45ID50 = log10M1BA45ID50 - log10BBA45ID50,
+         log10M1IGGSpikeIndex = log10(M1IGGMSDA16AU), #A16 = IgG S Index
+         log10BIGGSpikeIndex = log10(BIGGMSDA16AU), 
+         frIGGSpikeIndex = log10M1IGGSpikeIndex - log10BIGGSpikeIndex,
+         log10M1IGGSpikeBA45 = log10(M1IGGMSDA23AU), # A23 = IgG S BA.4/5
+         log10BIGGSpikeBA45 = log10(BIGGMSDA23AU), 
+         frIGGSpikeBA45 = log10M1IGGSpikeBA45 - log10BIGGSpikeBA45,
+         log10M1IGGN = log10(M1IGGMSDA15AU),
+         log10BIGGN = log10(BIGGMSDA15AU))
+
+# Define a stratification variable W corresponding to
+# 4 baseline strata + case
+# Mutate ph2 to logical 
+dt_serum_PP = dt_serum_PP %>%
+  mutate(W = ifelse(EventIndPrimary1 == 1, 1, 
+                    ifelse(AGRP2N == 1, 2, 
+                           ifelse(AGRP2N == 2.1, 3,
+                                  ifelse(AGRP2N == 3, 4, 5))))) %>%
+  mutate(ph2.m1.sera_logical = ifelse(ph2.m1.sera == 1, TRUE, FALSE))
+
+# Additional data processing
+# Derive baseline variables to be adjusted for in the 
+# antibody immune correlates analysis
+dt_serum_PP = dt_serum_PP %>%
+  mutate(TBFL = ifelse(TBFL == '', 'N', TBFL),
+         TBFL = ifelse(TBFL == 'Y', 1, 0)) %>%
+  mutate(AGEGR1 = ifelse(AGEGR1 == '>40', 1, 0),
+         BMIB2GR1 = ifelse(BMIB2GR1 == '>25', 1, 0),
+         CD4B2GR1 = ifelse(is.na(CD4B2GR1), 'NotKnown', 
+                           ifelse(CD4B2GR1 == '<=500', 'low', 'high')),
+         riskscore = ifelse(is.na(riskscore), median(riskscore, na.rm = T), riskscore),
+         enrollmentPeriodEarly = ifelse(CalendarDateEnrollment <= 90, 1, 0),
+         enrollmentPeriodMid = ifelse((CalendarDateEnrollment > 90 & CalendarDateEnrollment <= 180), 1, 0),
+         regionRSA = ifelse(REGION == 'South Africa', 1, 0))
+```
+
+## Define serum markers
+```{r setmarkerofinterest, echo=TRUE}
+antigen_vec = c('BA45ID50', 'IGGSpikeIndex', 'IGGSpikeBA45', 'IGGN')
+antigen_names_vec = c('nAb ID50 BA.4/5', 'IgG S Index',  
+                      'IgG Spike BA.4/5', 'IgG N Index')
+mk_vec_b = paste0('log10B', antigen_vec)
+names_vec_b = c('M0 nAb-ID50 BA.4/5 (AU/ml)',
+              'M0 IgG S Index (AU/ml)',
+              'M0 IgG Spike BA.4/5 (AU/ml)',
+              'M0 IgG N Index (AU/ml)')
+
+mk_vec_p = paste0('log10M1', antigen_vec)
+names_vec_p = c('Peak nAb-ID50 BA.4/5 (AU/ml)',
+              'Peak IgG S Index (AU/ml)',
+              'Peak IgG Spike BA.4/5 (AU/ml)',
+              'Peak IgG N Index (AU/ml)')
+
+mk_vec_fr = c('frBA45ID50', 'frIGGSpikeBA45')
+names_vec_fr = c('Fold-rise nAb-ID50 BA.4/5 (AU/ml)',
+              'Fold-rise IgG Spike BA.4/5 (AU/ml)')
+```
+
+
+## Define adjusted covariates
+```{r adj covs}
+adj_vars = c('regionRSA', 'HIVBL', 'riskscore', 
+             'enrollmentPeriodEarly') 
+n_var = 4
+```
+
+
+# Hybrid immunity group controlled risk and relative risk analysis
+
+
+```{r cohort HIPP}
+dt_serum_PP_HIPP = dt_serum_PP %>%
+  filter(hybrid == 1)
+```
+
+## Plot the controlled VE curve for baseline and peak markers
+
+```{r controlled VE HIPP, echo=FALSE, message=FALSE, warning=FALSE}
+controlled_ve_mk_vec = c(mk_vec_b, mk_vec_p)
+controlled_ve_names_vec = c(names_vec_b, names_vec_p)
+
+a = length(controlled_ve_mk_vec)
+for (i in 1:a){
+  mk = controlled_ve_mk_vec[i]
+  cat(mk, '\n')
+  dat <- load_data(
+  time = 'EventTimePrimary',
+  event = 'EventIndPrimary1',
+  vacc = 'hybrid',
+  marker = mk,
+  covariates = adj_vars,
+  weights = "wt.m1.sera",
+  ph2 = "ph2.m1.sera",
+  data = dt_serum_PP)
+
+b = vaccine::est_overall(dat, t_0 = 165)
+
+overall_incidence = b$est[b$group == 'vaccine']  
+
+ests_cox <- est_ce(dat = dat, type="Cox", t_0 = 165, return_p_value = TRUE, 
+                   cve = TRUE, placebo_risk_method = 'Cox')
+ests_np <- est_ce(dat = dat, type="NP", t_0 = 165, return_p_value = TRUE, 
+                  cve = TRUE, placebo_risk_method = 'Cox')
+
+df_np = data.frame(marker_level =  ests_np$cr$s,
+                      controlled_risk =  ests_np$cr$est, 
+                      ci_lower =  ests_np$cr$ci_lower, 
+                      ci_upper =  ests_np$cr$ci_upper) 
+write.csv(df_np, paste0( './source_data/Fig3_HIPP_',  mk, '.csv'))
+
+mk_dist = dt_serum_PP_HIPP %>%
+  filter(ph2.m1.sera == 1) %>%
+  select(!!sym(mk), wt.m1.sera)
+
+mk_dist_VIPP = dt_serum_PP %>%
+  filter(hybrid == 0) %>%
+  filter(ph2.m1.sera == 1) %>%
+  select(!!sym(mk), wt.m1.sera)
+
+# Weighted median of the marker level among VIPP
+mk_VIPP_med = wtd.quantile(mk_dist_VIPP[,1], 
+                           weights = mk_dist_VIPP[,2],
+                           probs = c(0.5))
+
+p = plot_cr2(ests_cox, ests_np, mk_dist, overall_incidence,
+                     xlab_name = controlled_ve_names_vec[i],
+                     title_name = 'Marker-Specific Risk',
+                     t0 = 165, x_range = c(-0.5, 7.5),
+                     x_breaks = seq(0, 7, 1),
+                     x_labels =  c(expression(10^0), expression(10^1), expression(10^2),
+                                   expression(10^3), expression(10^4), expression(10^5),
+                                   expression(10^6), expression(10^7)))
+p = p + geom_line(linewidth = 1.1) + 
+  geom_ribbon(ggplot2::aes(ymin = ci_lower, ymax = ci_upper), 
+              alpha = 0.2, linewidth = 1.1, linetype = "dotted") +
+  theme_bw(base_size = 30) + 
+  theme(legend.position = 'none') + ggtitle('')
+
+saveRDS(p, paste0('./raw_data_for_figure/', controlled_ve_mk_vec[i], '_HIPP.RData'))
+
+ggsave(paste0('./Figure/', controlled_ve_mk_vec[i], '_HIPP.pdf'),
+       p, width = 12, height = 8, units = 'in')
+}
+```
+
+
+## Plot the controlled relative risk curve for M0 markers: HIPP vs VIPP 
+
+```{r controlled RR HIPP, echo=FALSE, message=FALSE, warning=FALSE}
+controlled_ve_mk_vec = c(mk_vec_b)
+controlled_ve_names_vec = c(names_vec_b)
+
+a = length(controlled_ve_mk_vec)
+for (i in c(1,3,4)){
+  mk = controlled_ve_mk_vec[i]
+  cat(mk, '\n')
+  dat <- load_data(
+  time = 'EventTimePrimary',
+  event = 'EventIndPrimary1',
+  vacc = 'hybrid',
+  marker = mk,
+  covariates = adj_vars,
+  weights = "wt.m1.sera",
+  ph2 = "ph2.m1.sera",
+  data = dt_serum_PP)
+
+b = vaccine::est_overall(dat, t_0 = 165)
+
+overall_incidence = b$est[b$group == 'vaccine']  
+
+ests_cox <- est_ce(dat = dat, type="Cox", t_0 = 165, return_p_value = TRUE, 
+                   cve = TRUE, placebo_risk_method = 'Cox')
+ests_np <- est_ce(dat = dat, type="NP", t_0 = 165, return_p_value = TRUE, 
+                  cve = TRUE, placebo_risk_method = 'Cox')
+
+
+
+ests_np2 = ests_np
+ests_np2$cve$est = 1 - ests_np$cve$est
+ests_np2$cve$ci_lower = 1 - ests_np$cve$ci_upper
+ests_np2$cve$ci_upper = 1 - ests_np$cve$ci_lower
+
+df_np = data.frame(marker_level =  ests_np2$cve$s,
+                      RR =  ests_np2$cve$est, 
+                      ci_lower =  ests_np2$cve$ci_lower, 
+                      ci_upper =  ests_np2$cve$ci_upper) 
+write.csv(df_np, paste0( './source_data/SuppFig18_',  mk, '.csv'))
+
+mk_dist = dt_serum_PP_HIPP %>%
+  filter(ph2.m1.sera == 1) %>%
+  select(!!sym(mk), wt.m1.sera)
+
+mk_dist_VIPP = dt_serum_PP %>%
+  filter(hybrid == 0) %>%
+  filter(ph2.m1.sera == 1) %>%
+  select(!!sym(mk), wt.m1.sera)
+
+# Weighted median of the marker level among VIPP
+mk_VIPP_med = wtd.quantile(mk_dist_VIPP[,1], 
+                           weights = mk_dist_VIPP[,2],
+                           probs = c(0.5))
+
+p = plot_cve2(ests_cox, ests_np2, mk_dist, mk_VIPP_med,
+                     xlab_name = controlled_ve_names_vec[i],
+                     title_name = 'Marker-Specific Relative Risk',
+                     t0 = 165, x_range = c(-0.5, 7.5),
+                     x_breaks = seq(0, 7, 1),
+                     x_labels =  c(expression(10^0), expression(10^1), expression(10^2),
+                                   expression(10^3), expression(10^4), expression(10^5),
+                                   expression(10^6), expression(10^7)))
+
+p = p + geom_line(linewidth = 1.1) + 
+  geom_ribbon(ggplot2::aes(ymin = ci_lower, ymax = ci_upper), 
+              alpha = 0.2, linewidth = 1.1, linetype = "dotted") +
+  theme_bw(base_size = 30) + 
+  theme(legend.position = 'none') + ggtitle('')
+
+saveRDS(p, paste0('./raw_data_for_figure/', controlled_ve_mk_vec[i], '_RR_HIPP.RData'))
+
+ggsave(paste0('./Figure/', controlled_ve_mk_vec[i], '_RR_HIPP.pdf'),
+       p, width = 12, height = 8, units = 'in')
+}
+```
+
+## Vaccine immunity group controlled risk and relative risk analysis
+
+```{r cohort VIPP}
+dt_serum_PP_VIPP = dt_serum_PP %>%
+  filter(hybrid == 0) %>%
+  mutate(vaccine = 1)
+```
+
+### Plot the controlled risk curve for peak markers
+
+```{r controlled VE VIPP, echo=FALSE, message=FALSE, warning=FALSE}
+controlled_ve_mk_vec = c(mk_vec_p)
+controlled_ve_names_vec = c(names_vec_p)
+
+a = length(controlled_ve_mk_vec)
+for (i in 1:a){
+  mk = controlled_ve_mk_vec[i]  
+  cat(mk, '\n')
+  dat <- load_data(
+  time = 'EventTimePrimary',
+  event = 'EventIndPrimary1',
+  vacc = 'vaccine',
+  marker = mk,
+  covariates = adj_vars,
+  weights = "wt.m1.sera",
+  ph2 = "ph2.m1.sera",
+  data = dt_serum_PP_VIPP)
+
+b = vaccine::est_overall(dat, t_0 = 165, ve = FALSE)
+
+overall_incidence = b$est[b$group == 'vaccine']  
+
+ests_cox <- est_ce(dat = dat, type="Cox", t_0 = 165, return_p_value = TRUE, 
+                   cve = FALSE)
+ests_np <- est_ce(dat = dat, type="NP", t_0 = 165, return_p_value = TRUE, 
+                  cve = FALSE)
+
+df_np = data.frame(marker_level =  ests_np$cr$s,
+                      controlled_risk =  ests_np$cr$est, 
+                      ci_lower =  ests_np$cr$ci_lower, 
+                      ci_upper =  ests_np$cr$ci_upper) 
+write.csv(df_np, paste0( './source_data/Fig3_VIPP_',  mk, '.csv'))
+
+mk_dist = dt_serum_PP_VIPP %>%
+  filter(ph2.m1.sera == 1) %>%
+  select(!!sym(mk), wt.m1.sera)
+
+p = plot_cr2(ests_cox, ests_np, mk_dist, overall_incidence,
+                     xlab_name = controlled_ve_names_vec[i],
+                     title_name = 'Marker-Specific Risk',
+                     t0 = 165, x_range = c(-0.5, 7.5),
+                     x_breaks = seq(0, 7, 1),
+                     x_labels =  c(expression(10^0), expression(10^1), expression(10^2),
+                                   expression(10^3), expression(10^4), expression(10^5),
+                                   expression(10^6), expression(10^7)))
+p = p + geom_line(linewidth = 1.1) + 
+  geom_ribbon(ggplot2::aes(ymin = ci_lower, ymax = ci_upper), 
+              alpha = 0.2, linewidth = 1.1, linetype = "dotted") +
+  theme_bw(base_size = 30) + 
+  theme(legend.position = 'none') + ggtitle('')
+
+saveRDS(p, paste0('./raw_data_for_figure/', controlled_ve_mk_vec[i], '_VIPP.RData'))
+
+ggsave(paste0('./Figure/', controlled_ve_mk_vec[i], '_VIPP.pdf'),
+       p, width = 12, height = 8, units = 'in')
+}
+```
