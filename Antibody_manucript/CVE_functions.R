@@ -57,8 +57,8 @@ CoR_D1 <- function(dt, density,
   # Non-parametric method-based CoR analysis
   ests_np <- est_ce(dat = dat, type="NP", t_0 = t0, return_p_value = TRUE)
   
-  low = quantile(density$s, c(0.025, 0.975))[1]
-  high = quantile(density$s, c(0.025, 0.975))[2]
+  low = wtd.quantile(density$s, density$w, c(0.025, 0.975))[1]
+  high = wtd.quantile(density$s, density$w, c(0.025, 0.975))[2]
   
   Cox = truncate_ce(ests_cox, low, high)
   Nonparametric = truncate_ce(ests_np, low, high)
@@ -99,8 +99,9 @@ plot_cr <- function(ests_cox, ests_np, mk_dist,
   
   density = list(s = as.vector(unlist(mk_dist[,1])),
                  w = as.vector(unlist(mk_dist[,2])))
-  low = quantile(density$s, c(0.005, 0.995))[1]
-  high = quantile(density$s, c(0.005, 0.995))[2]
+   low = wtd.quantile(density$s, density$w, c(0.025, 0.975))[1]
+  high = wtd.quantile(density$s, density$w, c(0.025, 0.975))[2]
+  
   
   Cox = truncate_ce(ests_cox, low, high)
   Nonparametric = truncate_ce(ests_np, low, high)
@@ -133,8 +134,9 @@ plot_cr2 <- function(ests_cox, ests_np, mk_dist, overall_incidence,
   
   density = list(s = as.vector(unlist(mk_dist[,1])),
                  w = as.vector(unlist(mk_dist[,2])))
-  low = quantile(density$s, c(0.025, 0.975))[1]
-  high = quantile(density$s, c(0.025, 0.975))[2]
+  low = wtd.quantile(density$s, density$w, c(0.025, 0.975))[1]
+  high = wtd.quantile(density$s, density$w, c(0.025, 0.975))[2]
+  
   
   Cox = truncate_ce(ests_cox, low, high)
   Nonparametric = truncate_ce(ests_np, low, high)
@@ -169,8 +171,9 @@ plot_cr_fr <- function(ests_np, mk_dist, overall_incidence,
   
   density = list(s = as.vector(unlist(mk_dist[,1])),
                  w = as.vector(unlist(mk_dist[,2])))
-  low = quantile(density$s, c(0.025, 0.975))[1]
-  high = quantile(density$s, c(0.025, 0.975))[2]
+  low = wtd.quantile(density$s, density$w, c(0.025, 0.975))[1]
+  high = wtd.quantile(density$s, density$w, c(0.025, 0.975))[2]
+  
   
   Cox = truncate_ce(ests_cox, low, high)
   Nonparametric = truncate_ce(ests_np, low, high)
@@ -207,8 +210,9 @@ plot_cve <- function(ests_cox, ests_np, mk_dist, mk_VIPP_med,
   
   density = list(s = as.vector(unlist(mk_dist[,1])),
                  w = as.vector(unlist(mk_dist[,2])))
-  low = quantile(density$s, c(0.025, 0.975))[1]
-  high = quantile(density$s, c(0.025, 0.975))[2]
+  low = wtd.quantile(density$s, density$w, c(0.025, 0.975))[1]
+  high = wtd.quantile(density$s, density$w, c(0.025, 0.975))[2]
+  
   
   Cox = truncate_cve(ests_cox, mk_VIPP_med, high)
   Nonparametric = truncate_cve(ests_np, mk_VIPP_med, high)
@@ -246,8 +250,8 @@ plot_cve2 <- function(ests_cox, ests_np, mk_dist, mk_VIPP_med,
   
   density = list(s = as.vector(unlist(mk_dist[,1])),
                  w = as.vector(unlist(mk_dist[,2])))
-  low = quantile(density$s, c(0.025, 0.975))[1]
-  high = quantile(density$s, c(0.025, 0.975))[2]
+  low = wtd.quantile(density$s, density$w, c(0.025, 0.975))[1]
+  high = wtd.quantile(density$s, density$w, c(0.025, 0.975))[2]
   
   Cox = truncate_cve(ests_cox, mk_VIPP_med, high)
   Nonparametric = truncate_cve(ests_np, mk_VIPP_med, high)
