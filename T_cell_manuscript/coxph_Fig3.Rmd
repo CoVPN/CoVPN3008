@@ -168,49 +168,6 @@ knitr::kable(res, digits = 3, row.names = FALSE,
              col.names = c('Covariate', 'HR', 'P-Value', 'Lower CI', 'Upper CI'))
 ```
 
-## Univariate Correlates of Risk Analysis: interaction term
-
-```{r interaction HIPP, echo = TRUE, warning=FALSE, message=FALSE}
-antigen_vec = NULL
-antigen_names_vec = NULL
-for (i in 1:length(T_vec)) {
-  for (j in 1:length(C_vec)) {
-    for (k in 1:length(A_vec)) {
-      antigen_vec = c(antigen_vec,
-                      paste0(T_vec[i], C_vec[j], A_vec[k]))
-      antigen_names_vec = c(antigen_names_vec,
-                            paste0(T_names_vec[i], ' ', C_names_vec[j], ' ', A_names_vec[k]))
-    }
-  }
-} 
-
-mk_vec_b = paste0('B', antigen_vec)
-names_vec_b = paste0('M0 ', antigen_names_vec, ' (%)')
-
-mk_vec_p = paste0('M1', antigen_vec)
-names_vec_p = paste0('M1 ', antigen_names_vec, ' (%)')
-
-res = NULL
-for (mk in c(mk_vec_b, mk_vec_p) ){
-  dt_PBMC_PP_HIPP  = dt_PBMC_PP_HIPP %>%
-    mutate(HIVBLN = ifelse(HIVBL == 'Positive', 1, 0)) %>%
-    mutate(interaction_term = !!sym(mk) * HIVBLN)
-  md <- case_cohort_Cox_1(data = dt_PBMC_PP_HIPP, caseInd = "EventIndPrimary1", 
-                            subcohortInd = "is.subcohort", 
-                            baseline_strata  = "AGRP2N", 
-                            time_to_event = 'EventTimePrimary', 
-                            phase1_var_list = adj_vars, 
-                            phase2_var_list  = c(mk, 'interaction_term'))
-  coxfit = process_cccs_output(md)
-  res = rbind(res, coxfit[nrow(coxfit),]) # Last row is the marker
-}
-
-res$term = c(names_vec_b, names_vec_p)
-knitr::kable(res, digits = 3, row.names = FALSE, 
-             col.names = c('Covariate', 'HR', 'P-Value', 'Lower CI', 'Upper CI'))
-```
-
-
 ## Univariate Correlates of Risk Analysis: fold-rise markers
 
 ```{r fold-rise HIPP, echo = TRUE, warning=FALSE, message=FALSE}
