@@ -18,7 +18,9 @@ R packages that are required include:
 [12] survival_3.5-5  
 
 Detailed intructions to run the code and reproduce the results can be found
-in each RMD file.
+in each RMD file. 
+
+The running time of each RMD file on a typical computer is less than 10 minutes.
 
 The RMD file coxph_nAb_Fig3_and_Tbl2.md reproduces the following results:
 1. 6-month follow-up Cox regression results in Figure 3 of the main article;
