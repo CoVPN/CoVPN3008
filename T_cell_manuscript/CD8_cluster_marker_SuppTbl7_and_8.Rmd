@@ -1,0 +1,227 @@
+---
+title: "Coxph Report ICS"
+author: "CoVPN 3008"
+date: "2024-10-31"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(1)
+```
+
+## Preparing the dataset (omitted)
+
+```{r load pckages, echo=FALSE, warning=FALSE, message=FALSE}
+library(CaseCohortCoxSurvival)
+library(survival)
+library(dplyr)
+library(survey)
+library(ggplot2)
+library(vaccine)
+library(wCorr)
+library(coxphw)
+library(haven)
+library(GGally)
+library(tidyr)
+library(stringr)
+source('coxph_functions_PBMC.R')
+```
+
+# Data wrangling
+
+```{r data wrangling, echo=FALSE}
+dt = read.csv('./COVID_realdata_ics_bama_nab_bcp20241210_processed_with_riskscore.csv')
+dt_adsl = read_sas('./adsl.sas7bdat')
+dt_adsl = dt_adsl %>%
+  select(USUBJID, AGEGR1, SEX, BMIB2GR1, CD4B2GR1, HIVDETBL2, REGION)
+dt = merge(dt, dt_adsl, by.x = 'Subjectid', by.y = 'USUBJID')
+
+# PBMC correlates analysis is restricted to PLWH
+dt_PBMC_PP = dt %>% 
+  filter(ph1.m1.ics == 1) %>%
+  mutate(hybrid = (AGRP2N == 2.1) + 0) %>%
+  mutate(is.subcohort = ifelse(ph2.m1.ics == 1 & IMMFL == 'Y', 1, 0))
+
+# Define a stratification variable W corresponding to
+# 4 baseline strata + case
+# Mutate ph2 to logical 
+dt_PBMC_PP = dt_PBMC_PP %>%
+  mutate(W = ifelse(EventIndPrimary1 == 1, 1, 
+                    ifelse(AGRP2N == 1, 2, 3))) %>%
+  mutate(ph2.m1.ics_logical = ifelse(ph2.m1.ics == 1, TRUE, FALSE))
+
+dt_PBMC_PP = dt_PBMC_PP %>%
+  mutate(TBFL = ifelse(TBFL == '', 'N', TBFL),
+         TBFL = ifelse(TBFL == 'Y', 1, 0)) %>%
+  mutate(AGEGR1 = ifelse(AGEGR1 == '>40', 1, 0),
+         BMIB2GR1 = ifelse(BMIB2GR1 == '>25', 1, 0),
+         CD4B2GR1 = ifelse(is.na(CD4B2GR1), 'NotKnown', 
+                           ifelse(CD4B2GR1 == '<=500', 'low', 'high')),
+         riskscore = ifelse(is.na(riskscore), median(riskscore, na.rm = T), riskscore),
+         enrollmentPeriodEarly = ifelse(CalendarDateEnrollment <= 90, 1, 0),
+         enrollmentPeriodMid = ifelse((CalendarDateEnrollment > 90 & CalendarDateEnrollment <= 180), 1, 0),
+         regionRSA = ifelse(REGION == 'South Africa', 1, 0))
+```
+
+
+```{r process cluster data}
+dt_cluster = read.csv('./dt_LEIDEN_filt_CD8+T.csv')
+dt_cluster = dt_cluster %>%
+  mutate(PTID = paste0('C3008-', PTID),
+         VISITNO = ifelse(VISITNO == 2, 'B', 'M1')) %>%
+  mutate(Leiden = str_replace(Leiden, ': ', '_')) %>%
+  filter(STIM %in% c('Spike BA4/5', 'Spike Ancestral', 'Any BA4/5', 'Any Ancestral') ) %>%
+  mutate(STIM = str_replace(STIM, ' ', '_')) %>%
+  mutate(STIM = str_replace(STIM, '/', '_')) %>%
+  pivot_wider(id_cols = 'PTID', names_from = c('VISITNO', 'Leiden', 'STIM'), values_from = 'PCTPOS_ADJ') %>%
+  dplyr::rename(Subjectid = PTID)
+
+
+dt_PBMC_PP = merge(dt_PBMC_PP, dt_cluster, by = 'Subjectid', all.x = TRUE)  
+```
+
+
+
+## Define markers
+```{r setmarkerofinterest, echo=TRUE}
+antigen_vec = colnames(dt_cluster)[-1]
+antigen_names_vec = antigen_vec
+
+process <- function(x) log10(ifelse(x < 0.001, 0.001, x))
+
+dt_PBMC_PP = dt_PBMC_PP %>%
+  mutate_at(antigen_vec, process)
+
+
+standardize <- function(x) (x - wtd.mean(x, weights = dt_PBMC_PP$wt.m1.ics, na.rm = TRUE))/sqrt(wtd.var(x, weights = dt_PBMC_PP$wt.m1.ics, na.rm = TRUE))
+
+dt_PBMC_PP = dt_PBMC_PP %>%
+  mutate_at(antigen_vec, standardize)
+
+# Add fold-rise markers
+#for (antigen in antigen_vec) {
+#  dt_PBMC_PP = dt_PBMC_PP %>%
+#    mutate(!!paste0('fr', antigen) :=  !!sym(paste0('M1', antigen)) - !!sym(paste0('B', antigen)))
+#}
+
+```
+
+
+## Define adjusted covariates
+```{r adj covs}
+adj_vars = c('riskscore') 
+```
+
+
+### Hybrid immunity group
+
+```{r cohort HIPP}
+dt_PBMC_PP_HIPP = dt_PBMC_PP %>%
+  filter(hybrid == 1)
+```
+
+
+
+### Univariate Correlates of Risk Analysis: baseline (M0) and approximate peak (M1) markers
+
+### Any Ancestral
+
+```{r CaseCohortReg0 HIPP, echo = TRUE, warning=FALSE, message=FALSE}
+res = NULL
+antigen_vec_any_anc = antigen_vec[1:14]
+antigen_names_vec_any_anc = antigen_names_vec[1:14]
+
+for (mk in antigen_vec_any_anc){
+  #cat(mk, '\n')
+  md <- case_cohort_Cox_1(data = dt_PBMC_PP_HIPP, caseInd = "EventIndPrimary1", 
+                            subcohortInd = "is.subcohort", 
+                            baseline_strata  = "AGRP2N", 
+                            time_to_event = 'EventTimePrimary', 
+                            phase1_var_list = adj_vars, 
+                            phase2_var_list  = c(mk))
+  coxfit = process_cccs_output(md)
+  res = rbind(res, coxfit[nrow(coxfit),]) # Last row is the marker
+}
+res$term = antigen_names_vec_any_anc
+res$FDR_adjusted_p.value = p.adjust(res$p.value, method = 'BH')
+knitr::kable(res, digits = 3, row.names = FALSE, 
+             col.names = c('Covariate', 'HR', 'P-Value', 'Lower CI', 'Upper CI', 'FDR Adjusted P'))
+```
+
+
+### Any BA.4/5
+
+```{r CaseCohortReg1 HIPP, echo = TRUE, warning=FALSE, message=FALSE}
+res = NULL
+antigen_vec_any_BA45 = antigen_vec[15:26]
+antigen_names_vec_any_BA45 = antigen_names_vec[15:26]
+
+for (mk in antigen_vec_any_BA45){
+  #cat(mk, '\n')
+  md <- case_cohort_Cox_1(data = dt_PBMC_PP_HIPP, caseInd = "EventIndPrimary1", 
+                            subcohortInd = "is.subcohort", 
+                            baseline_strata  = "AGRP2N", 
+                            time_to_event = 'EventTimePrimary', 
+                            phase1_var_list = adj_vars, 
+                            phase2_var_list  = c(mk))
+  coxfit = process_cccs_output(md)
+  res = rbind(res, coxfit[nrow(coxfit),]) # Last row is the marker
+}
+res$term = antigen_names_vec_any_BA45
+res$FDR_adjusted_p.value = p.adjust(res$p.value, method = 'BH')
+knitr::kable(res, digits = 3, row.names = FALSE, 
+             col.names = c('Covariate', 'HR', 'P-Value', 'Lower CI', 'Upper CI', 'FDR Adjusted P'))
+```
+
+### Spike Ancestral
+
+```{r CaseCohortReg2 HIPP, echo = TRUE, warning=FALSE, message=FALSE}
+res = NULL
+antigen_vec_spike_anc = antigen_vec[27:40]
+antigen_names_vec_spike_anc = antigen_names_vec[27:40]
+
+for (mk in antigen_vec_spike_anc){
+  #cat(mk, '\n')
+  md <- case_cohort_Cox_1(data = dt_PBMC_PP_HIPP, caseInd = "EventIndPrimary1", 
+                            subcohortInd = "is.subcohort", 
+                            baseline_strata  = "AGRP2N", 
+                            time_to_event = 'EventTimePrimary', 
+                            phase1_var_list = adj_vars, 
+                            phase2_var_list  = c(mk))
+  coxfit = process_cccs_output(md)
+  res = rbind(res, coxfit[nrow(coxfit),]) # Last row is the marker
+}
+res$term = antigen_names_vec_spike_anc
+res$FDR_adjusted_p.value = p.adjust(res$p.value, method = 'BH')
+knitr::kable(res, digits = 3, row.names = FALSE, 
+             col.names = c('Covariate', 'HR', 'P-Value', 'Lower CI', 'Upper CI', 'FDR Adjusted P'))
+ write.csv(res, file = 'HR_CD8_Spike_Ancestral.csv')
+```
+
+
+### Spike BA.4/5
+
+```{r CaseCohortReg3 HIPP, echo = TRUE, warning=FALSE, message=FALSE}
+res = NULL
+antigen_vec_spike_BA45 = antigen_vec[41:50]
+antigen_names_vec_spike_BA45 = antigen_names_vec[41:50]
+
+for (mk in antigen_vec_spike_BA45){
+  #cat(mk, '\n')
+  md <- case_cohort_Cox_1(data = dt_PBMC_PP_HIPP, caseInd = "EventIndPrimary1", 
+                            subcohortInd = "is.subcohort", 
+                            baseline_strata  = "AGRP2N", 
+                            time_to_event = 'EventTimePrimary', 
+                            phase1_var_list = adj_vars, 
+                            phase2_var_list  = c(mk))
+  coxfit = process_cccs_output(md)
+  res = rbind(res, coxfit[nrow(coxfit),]) # Last row is the marker
+}
+res$term = antigen_names_vec_spike_BA45
+res$FDR_adjusted_p.value = p.adjust(res$p.value, method = 'BH')
+knitr::kable(res, digits = 3, row.names = FALSE, 
+             col.names = c('Covariate', 'HR', 'P-Value', 'Lower CI', 'Upper CI', 'FDR Adjusted P'))
+ write.csv(res, file = 'HR_CD8_Spike_BA45.csv')
+```
+
