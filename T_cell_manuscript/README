@@ -1,22 +1,22 @@
 This folder hosts RMD files necessary to reproduce the ICS and antibody correlates analysis in CoVPN 3008 Study.
 
 The RMD file coxph_Fig4.Rmd reproduces the following results:
-1. Univaraite Cox regression results in Figure 4 of the main article.
+  Univaraite Cox regression results in Figure 4 of the main article.
 
 The RMD file coxph_Fig5.Rmd reproduces the following results:
-1. Bivariate Cox regression results in Figure 5 of the main article.
+  Bivariate Cox regression results in Figure 5 of the main article.
 
 The RMD file ICS_ControlledRisk_NP_Fig4.Rmd reproduces the following results:
-1. Controlled risk curves in the Figure 4 of the main article.
+  Controlled risk curves in the Figure 4 of the main article.
 
 The RMD file Plot_two_markers_case_noncase_Fig5.Rmd reproduces the following results:
-1. The bivariate marker plot in the Figure 5 of the main article.
+  The bivariate marker plot in the Figure 5 of the main article.
 
 The RMD file CD4_cluster_marker_SuppTbl5_and6.Rmd reproduces the following results:
-1. Univaraite Cox regression results in Supplemental Tables 5 and 6 in the Supplement.
+  Univaraite Cox regression results in Supplemental Tables 5 and 6 in the Supplement.
 
 The RMD file CD8_cluster_marker_SuppTbl5_and6.Rmd reproduces the following results:
-1. Univaraite Cox regression results in Supplemental Tables 7 and 8 in the Supplement.
+  Univaraite Cox regression results in Supplemental Tables 7 and 8 in the Supplement.
 
 The RMD file ICS_ControlledRisk_NP_SuppFig14.Rmd reproduces the following results:
-1. Controlled risk curves in the Supplemental Figure 14 of the supplement.
+  Controlled risk curves in the Supplemental Figure 14 of the supplement.
