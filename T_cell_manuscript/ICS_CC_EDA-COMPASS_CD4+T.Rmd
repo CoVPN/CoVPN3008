@@ -1,0 +1,1495 @@
+---
+title: "- ICS - CD4+ T - `COMPASS` - Case vs. Non-Case -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(cowplot)
+library(data.table)
+library(doMC)
+library(COMPASS)
+library(gtable)
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- meta.data
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+  filter(FASFL == "Y") # 168 PTIDs
+```
+
+`COMPASS` (Combinatorial Polyfunctionality Analysis of Single Cells) is a computational framework for unbiased polyfunctionality analysis of antigen-specific T-cell subsets. `COMPASS` uses a Bayesian hierarchical framework to model all observed functional cell subsets and select those most likely to exhibit antigen-specific responses. Cell subset responses are quantified by posterior probabilities, while subject-level responses are quantified by two summary statistics (*scores*) that can be correlated directly with clinical outcome and describe the quality of an individual's (poly)functional response. The functionality score is defined as the estimated proportion of antigen-specific subsets detected among all possible ones. The polyfunctionality score is similar, but it weighs the different subsets by their degree of functionality, naturally favoring subsets with higher degrees of functions, motivated by the observation that higher degree function has been correlated with good outcomes in certain vaccine studies. 
+For the `COMPASS` analysis, cell subsets that do not have at least 10 cells in at least 5 participants are excluded. The standard ICS filter on mean negative control is not used. Unreliable samples are also excluded.  
+
+# - `COMPASS`
+_____________
+
+`COMPASS` with CD4+ T expressing 1 of 8 cytokines or functional activation markers (IFN-$\gamma$, TNF, CD154, IL-2, IL-4, IL-5/IL-13, IL-17a and IL-21) has been run on Rhino; see code below:  
+
+* `CC_COMPASScontainer_CD4+T.R` (1);  
+
+* `CC_COMPASS_tuning-params_CD4+T.R` (2);  
+
+* `CC_COMPASS_runCOMPASS_CD4+T.R` (3);  
+
+* `CC_COMPASSMCMCDiagnosis_CD4+T.R` (4).  
+
+## - **Spike Ancestral**
+
+For each sample we find the antigen that maximizes the **Functionality score**. Then we use that antigen's profile as the profile for the pooled response. This means the Functionality score is the max Functionality Score. The **Polyfunctionality score** is generally the max polyfunctionality score, but might not be if the ordering of the 2 scores differs.  
+
+* __Spike Ancestral__ = sum(COV2 CON S1, COV2 CON S2).    
+
+**Functionality score**
+
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS (mean)
+#- Data
+res.COMPASS_1 <- readRDS(file = "./tuning/COV2 CON S1/CoVPN-3008_CD4+T_COV2 CON S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS(file = "./tuning/COV2 CON S2/CoVPN-3008_CD4+T_COV2 CON S2_COMPASS-dx.rds")
+
+#- dt.ggplot (data.table())
+#- Data (dt.ggplot)
+dt.ggplot_1 <- scores(res.COMPASS_1$mean_model) %>%
+  mutate(STIM = "COV2 CON S1") %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_1" = "FS", "PFS_1" = "PFS")
+dt.ggplot_2 <- scores(res.COMPASS_2$mean_model) %>%
+  mutate(STIM = "COV2 CON S2") %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_2" = "FS", "PFS_2" = "PFS")
+identical(dt.ggplot_1$ptid.visitno, dt.ggplot_2$ptid.visitno) # TRUE
+dt.ggplot <- merge(x = dt.ggplot_1, 
+                   y = dt.ggplot_2 %>%
+                     select(ptid.visitno, FS_2, PFS_2), 
+                   by = "ptid.visitno") %>%
+  select(ptid.visitno, PTID, VISITNO, VISITMONTH, FS_1, PFS_1, FS_2, PFS_2)
+dt.ggplot <- dt.ggplot %>%
+  group_by(ptid.visitno) %>%
+  mutate(filt = c("COV2 CON S1", "COV2 CON S2")[which.max(c(FS_1, FS_2))]) %>%
+  mutate(FS_final = c(FS_1, FS_2)[which.max(c(FS_1, FS_2))]) %>%
+  mutate(PFS_final = c(PFS_1, PFS_2)[which.max(c(FS_1, FS_2))])
+# dt.ggplot <- read_csv(file = "./dt_COMPASS_Spike Ancestral.csv")
+dt.ggplot <- dt.ggplot %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE))
+dt.ggplot$STIM <- "Spike Ancestral"
+# dt.ggplot %>%
+#   mutate(STIM_1 = "COV2 CON S1") %>%
+#   mutate(STIM_2 = "COV2 CON S2") %>%
+#   ungroup() %>%
+#   select(PTID, VISITNO, STIM, STIM_1, STIM_2, FS_1, FS_2, PFS_1, PFS_2, filt, FS_final, PFS_final) %>%
+#   write_csv(file = "./dt_COMPASS_Spike Ancestral.csv")
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- Fig.
+#- Data
+dt.ggplot <- dt.ggplot %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITMONTH, from = c("M0", "M1", "M2"), to = c("M0", "M1/2", "M1/2"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          STIM == "BA.4-5 S1" ~ "BA4/5 S1",
+                          STIM == "BA.4-5 S2" ~ "BA4/5 S2",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH"))) %>%
+  mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                       VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                       VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                       VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                       .default = "Post two\nvaccinations")) %>%
+ mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2")))
+  
+#- Fig.
+set.seed(1234)
+dt.ggplot %>%
+  ggplot() +
+    geom_point(aes(x = X, y = FS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_line(aes(x = X, y = FS_final, color = COLOR_LINE, group = PTID), 
+              position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+              linewidth = .2, alpha = .7) +
+    geom_boxplot(aes(x = X, y = FS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+    scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2"),
+                     labels = c("Baseline", "Post two\nvaccinations", "Baseline", "Post one\nvaccination"), 
+                     drop = TRUE) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                 "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Functionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_FS_Spike Ancestral(1).pdf", width = 6, height = 6.25)
+plot
+dev.off()
+
+#- Fig. (2)
+set.seed(1234)
+dt.ggplot %>%
+  mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                              VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                              .default = "Post two\nvaccinations")) %>%
+  mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+  ggplot() +
+    geom_point(aes(x = COHORT, y = FS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_boxplot(aes(x = COHORT, y = FS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                 "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Functionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_FS_Spike Ancestral(2).pdf", width = 10, height = 7.25)
+plot
+dev.off()
+```
+
+**PolyFunctionality score**
+
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- Fig.
+#- Fig. (1)
+set.seed(1234)
+dt.ggplot %>%
+  ggplot() +
+    geom_point(aes(x = X, y = PFS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_line(aes(x = X, y = PFS_final, color = COLOR_LINE, group = PTID), 
+              position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+              linewidth = .2, alpha = .7) +
+    geom_boxplot(aes(x = X, y = PFS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+    scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2"),
+                      labels = c("Baseline", "Post two\nvaccinations", "Baseline", "Post one\nvaccination"), 
+                      drop = TRUE) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                 "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Polyfunctionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_PFS_Spike Ancestral(1).pdf", width = 6, height = 6.25)
+plot
+dev.off()
+
+#- Fig. (2)
+set.seed(1234)
+dt.ggplot %>%
+  mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                              VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                              .default = "Post two\nvaccinations")) %>%
+  mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+  ggplot() +
+    geom_point(aes(x = COHORT, y = PFS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_boxplot(aes(x = COHORT, y = PFS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Polyfunctionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_PFS_Spike Ancestral(2).pdf", width = 10, height = 7.25)
+plot
+dev.off()
+```
+
+**Case-cohort boxplot**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Fig. 1 (cases vs. non-cases)
+dt.ggplot <- dt.ggplot %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          STIM == "BA.4-5 S1" ~ "BA4/5 S1",
+                          STIM == "BA.4-5 S2" ~ "BA4/5 S2",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS-CoV-2-", .default = "SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS-CoV-2-", "SARS-CoV-2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1", "AG2-2") ~ "HIV+", .default = "HIV-")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("HIV+", "HIV-"))) %>%
+  filter(RX_CODE == "AG2-1")
+
+#- Fig. (a)
+cairo_pdf(file = "COMPASS_CC_Fig_1(a).pdf", 
+    width = 8, 
+    height = 6, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike Ancestral") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(FACET_X2 = case_when(VISITNO == "2" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                VISITNO == "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                .default = "Post two\nvaccinations")) %>%
+    mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+    mutate(COHORT = factor(x = COHORT, levels = c("1", "0")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = COHORT, y = FS_final, fill = FILL_BX, group = PTID), color = "white",
+                 position = position_jitterdodge(jitter.width = .2, dodge.width = .5, seed = 123),
+                 pch = 21, size = 3, alpha = .7) +
+      geom_boxplot(aes(x = COHORT, y = FS_final, fill = FILL_BX),
+                   alpha = .25, width = .5, outlier.shape = NA) +
+      geom_violin(aes(x = COHORT, y = FS_final, color = FILL_BX),
+                  alpha = 0) +
+      facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("1", "0"),
+                       labels = c("Cases", "Non-cases")) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "white" = "white"), guide = "none") +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score", 
+           fill = NULL,
+           shape = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 12),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.text = element_text(size = 14),
+            legend.position = "bottom") -> plot
+  plot %>% print()
+} 
+dev.off()
+
+#- Fig. (a)
+cairo_pdf(file = "COMPASS_CC_Fig_1(a_!M0).pdf", 
+    width = 4.5, 
+    height = 5.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike Ancestral") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(VISITNO != "2") %>%
+    filter(STIM == i) %>%
+    mutate(FACET_X2 = case_when(VISITNO == "2" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                VISITNO == "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                .default = "Post two\nvaccinations")) %>%
+    mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+    mutate(COHORT = factor(x = COHORT, levels = c("1", "0")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = COHORT, y = FS_final, fill = FILL_BX, group = PTID), color = "white",
+                 position = position_jitterdodge(jitter.width = .2, dodge.width = .5, seed = 123),
+                 pch = 21, size = 3, alpha = .7) +
+      geom_boxplot(aes(x = COHORT, y = FS_final, fill = FILL_BX),
+                   alpha = .25, width = .5, outlier.shape = NA) +
+      geom_violin(aes(x = COHORT, y = FS_final, color = FILL_BX),
+                  alpha = 0) +
+      facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("1", "0"),
+                       labels = c("Cases", "Non-cases")) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "white" = "white"), guide = "none") +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score", 
+           fill = NULL,
+           shape = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 12),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.text = element_text(size = 14),
+            legend.position = "bottom") -> plot
+  plot %>% print()
+} 
+dev.off()
+
+#- Fig. (b)
+cairo_pdf(file = "COMPASS_CC_Fig_1(b).pdf", 
+    width = 8, 
+    height = 6, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike Ancestral") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(FACET_X2 = case_when(VISITNO == "2" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                VISITNO == "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                .default = "Post two\nvaccinations")) %>%
+    mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+    mutate(COHORT = factor(x = COHORT, levels = c("1", "0")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = COHORT, y = PFS_final, fill = FILL_BX, group = PTID), color = "white",
+                 position = position_jitterdodge(jitter.width = .2, dodge.width = .5, seed = 123),
+                 pch = 21, size = 3, alpha = .7) +
+      geom_boxplot(aes(x = COHORT, y = PFS_final, fill = FILL_BX),
+                   alpha = .25, width = .5, outlier.shape = NA) +
+      geom_violin(aes(x = COHORT, y = PFS_final, color = FILL_BX),
+                  alpha = 0) +
+      facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("1", "0"),
+                       labels = c("Cases", "Non-cases")) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "white" = "white"), guide = "none") +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Polyfunctionality score", 
+           fill = NULL,
+           shape = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 12),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.text = element_text(size = 14),
+            legend.position = "bottom") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+
+**Heatmap / Boxplot**
+
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS
+#- COMPASS
+res.COMPASS_1 <- readRDS(file = "./tuning/COV2 CON S1/CoVPN-3008_CD4+T_COV2 CON S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS(file = "./tuning/COV2 CON S2/CoVPN-3008_CD4+T_COV2 CON S2_COMPASS-dx.rds")
+
+#- Packages
+# remotes::install_github("SATVILab/UtilsCompassSV")
+library(UtilsCompassSV)
+
+#- Cyt.
+# Function pp_tbl_f
+pp_tbl_f <- function(x = x, i = 1){
+  pp_mat <- x$fit$mean_gamma
+  colnames(pp_mat) <- convert_cyt_combn_format(colnames(pp_mat), to = "std")
+  colnames(pp_mat) <- str_remove_all(string = colnames(pp_mat), pattern = " V450| APC| BB700| BB630| PE[-]Cy7| PE[-]CF594| BUV737| BUV395")
+  pp_tbl <- tibble::as_tibble(pp_mat)
+  pp_tbl$id <- rownames(x$fit$mean_gamma)
+  pp_tbl %>% 
+    tidyr::pivot_longer(-id, names_to = "combn", values_to = "prob") %>%
+    dplyr::mutate(.grp = names(c_obj)[i]) -> pp_tbl
+  pp_tbl %>% return()
+}
+pp_tbl_f(x = res.COMPASS_1$mean_model)
+# Function filtering_f
+combn_sel_vec_f <- function(x = x, prob_min = 0.8, quant_min = 0.25){
+  combn_sel_vec <- x %>%
+    dplyr::filter(str_detect(string = combn, pattern = "[[+]]")) %>%
+    dplyr::group_by(combn, .grp) %>%
+    dplyr::filter(quantile(prob, prob_min) >= quant_min) %>%
+    magrittr::extract2("combn") %>%
+    unique()
+  combn_sel_vec %>% return()
+}
+# Cyt. in common
+pp_tbl_1 <- pp_tbl_f(x = res.COMPASS_1$mean_model)
+pp_tbl_2 <- pp_tbl_f(x = res.COMPASS_2$mean_model)
+combn_sel_vec_1 <- combn_sel_vec_f(x = pp_tbl_1)
+combn_sel_vec_2 <- combn_sel_vec_f(x = pp_tbl_2)
+setdiff(combn_sel_vec_1, combn_sel_vec_2)
+setdiff(combn_sel_vec_2, combn_sel_vec_1)
+combn_sel_vec <- unique(c(combn_sel_vec_1, combn_sel_vec_2))
+
+#- Plot GRID
+# Calculate degree of each cytokine combination
+degree_lab_vec <- purrr::map_chr(combn_sel_vec, function(combn) {
+    nrow(stringr::str_locate_all(combn, "[[+]]")[[1]])
+  }) %>%
+  setNames(combn_sel_vec)
+degree_lab_vec
+pp_tbl <- bind_rows(pp_tbl_1, pp_tbl_2) %>%
+  filter(!duplicated(paste(id, combn)))
+pp_tbl <- pp_tbl %>%
+  dplyr::filter(combn %in% combn_sel_vec) %>%
+  dplyr::mutate(degree = degree_lab_vec[combn])
+# Order cyt combns within each degree by post probs
+combn_factor_levels_vec <- pp_tbl %>%
+  dplyr::group_by(degree, combn, .grp) %>%
+  dplyr::summarise(quant = quantile(prob, 0.75), .groups = "drop") %>%
+  dplyr::group_by(degree, combn) %>%
+  dplyr::filter(quant == max(quant)) %>%
+  dplyr::slice(1) %>%
+  dplyr::group_by(degree) %>%
+  dplyr::arrange(quant, .by_group = TRUE) %>%
+  dplyr::ungroup() %>%
+  magrittr::extract2("combn")
+pp_tbl <- pp_tbl %>%
+    dplyr::mutate(combn = factor(.data$combn, levels = combn_factor_levels_vec))
+# Create grid tbl
+cyt_order <- c("TNFa", "IL21", "IL17a", "IL5/IL13", "IL4", "IL2", "IFNg", "CD154")
+grid_tbl <- pp_tbl %>%
+  dplyr::select(combn, degree) %>%
+  dplyr::group_by(combn, degree) %>%
+  dplyr::slice(1) %>%
+  dplyr::ungroup()
+for(cyt in cyt_order) {
+  grid_tbl[[cyt]] <- as.character(stringr::str_detect(grid_tbl$combn, paste0(cyt, "[[+]]")))
+}
+grid_tbl %>%
+  tidyr::pivot_longer(-c(combn, degree), names_to = "cyt", values_to = "expressed") %>%
+  dplyr::mutate(cyt = factor(.data$cyt, levels = cyt_order)) -> grid_tbl
+# Set up colors
+dt.ggplot <- grid_tbl %>%
+  dplyr::mutate(expr_degree = paste0(expressed, degree))
+dt.ggplot$expr_degree %>% unique()
+my.colors <- c(RColorBrewer::brewer.pal(n = length(unique(dt.ggplot$degree)), name = "Paired"), 
+               rep("white", length(unique(dt.ggplot$degree))))
+names(my.colors) <- c(paste0("TRUE", 1:length(unique(dt.ggplot$degree))),
+                      paste0("FALSE", 1:length(unique(dt.ggplot$degree))))
+# Fig.
+dt.ggplot %>%
+  mutate(cyt = case_when(cyt == "TNFa" ~ "TNF", .default = cyt)) %>%
+  mutate(cyt = factor(x = cyt, levels = c("TNF", "IL21", "IL17a", "IL5/IL13", "IL4", "IL2", "IFNg", "CD154"))) %>%
+  ggplot(aes(x = combn, y = cyt, fill = expr_degree)) +
+    geom_tile(col = "black") +
+    scale_fill_manual(values = my.colors) +
+    theme_classic() +
+    theme(legend.position = "none",
+          axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          axis.ticks = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank()) -> plotB
+plotB
+
+#- Magnitude
+load(file = "./001_High-Dimensional-ICS-Analysis_CD4+T.RData")
+dt <- dt %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"), 
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"),
+                                  warn_missing = FALSE))
+# Cyt.
+grid_tbl <- pp_tbl %>%
+  dplyr::select(combn, degree) %>%
+  dplyr::group_by(combn, degree) %>%
+  dplyr::slice(1) %>%
+  dplyr::ungroup()
+for(cyt in cyt_order) {
+  grid_tbl[[cyt]] <- as.character(stringr::str_detect(grid_tbl$combn, paste0(cyt, "[[+]]")))
+}
+# Data
+foreach(i = 1:nrow(grid_tbl)) %do% {
+  # cbmn
+  cmbn.tmp <- do.call(paste, c(grid_tbl[i, 3:ncol(grid_tbl)], sep = "_"))
+  degree.tmp <- grid_tbl$degree[i]
+  # dt
+  dt.tmp <- dt %>%
+    select(BATCH, PTID, STIM, VISITNO, RUNNUM, REPLICATE, RX_CODE, COHORT, NSUB, 
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/TNFa+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL21+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL17a+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL5_OR_IL13+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL4+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL2+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IFNg+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/154+`)
+  dt.tmp$CYT <- do.call(paste, c(dt.tmp[, 10:ncol(dt.tmp)], sep = "_"))
+  # summary      
+  levels.tmp <- expand.grid(replicate(8, c(TRUE, FALSE), simplify = FALSE))
+  levels.tmp <- levels.tmp %>%
+    rowwise() %>%
+    mutate(combined = paste(c_across(everything()), collapse = "_")) %>%
+    ungroup() %>%
+    pull(combined)
+  dt.summary.tmp <- dt.tmp %>%
+    mutate(CYT = factor(x = CYT, levels = levels.tmp)) %>%
+    group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, REPLICATE, RX_CODE, COHORT, NSUB, CYT, .drop = FALSE) %>%
+    summarise(CYTNUM = n()) %>%
+    filter(CYT == cmbn.tmp) %>%
+    group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, RX_CODE, COHORT, .drop = FALSE) %>%
+    summarise(NSUB = sum(NSUB), CYTNUM = sum(CYTNUM)) %>%
+    ungroup()
+  setdiff(paste(dt.summary_Rhino$PTID, dt.summary_Rhino$STIM, dt.summary_Rhino$VISITNO),
+          paste(dt.summary.tmp$PTID, dt.summary.tmp$STIM, dt.summary.tmp$VISITNO)) %>%
+    print()
+  dt.summary.tmp$combn <- grid_tbl$combn[i]
+  dt.summary.tmp$degree <- degree.tmp
+  dt.summary.tmp %>% return()
+} %>%
+  bind_rows() -> dt.summary.COMPASS
+# PCTPOS_ADJ
+dt.tmp_1 <- dt.summary.COMPASS %>%
+  mutate(SAMPLE = paste(BATCH, PTID, VISITNO, combn)) %>%
+  filter(STIM == "negctrl") %>%
+  rename(NSUB_NEG = "NSUB", CYTNUM_NEG = "CYTNUM") %>%
+  select(SAMPLE, NSUB_NEG, CYTNUM_NEG) 
+dt.tmp_2 <- dt.summary.COMPASS %>%
+  mutate(SAMPLE = paste(BATCH, PTID, VISITNO, combn)) %>%
+  filter(STIM != "negctrl")
+dt.summary.COMPASS <- merge(x = dt.tmp_2, y = dt.tmp_1, by = "SAMPLE", all.x = TRUE) %>%
+  mutate(PCTPOS = (CYTNUM / NSUB) * 100) %>%
+  mutate(PCTNEG = (CYTNUM_NEG / NSUB_NEG) * 100) %>%
+  mutate(PCTPOS_ADJ = PCTPOS - PCTNEG) %>%
+  arrange(BATCH, PTID, STIM, VISITNO) %>%
+  ungroup() %>%
+  select(-SAMPLE)
+
+#- Combined (Spike Ancestral)
+dt.tmp <- dt.summary.COMPASS %>%
+  filter(STIM %in% c("COV2 CON S1", "COV2 CON S2")) %>%
+  group_by(PTID, VISITNO, RUNNUM, RX_CODE, COHORT, combn, degree) %>%
+  filter(n() == 2) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0, 0, PCTPOS_ADJ)) %>%
+  summarize(PCTPOS_ADJ = sum(PCTPOS_ADJ, na.rm = TRUE)) %>%
+  mutate(STIM = "Spike Ancestral")
+#- Add results to table
+dt.tmp <- dt.tmp %>%
+  mutate(BATCH = NA) %>%
+  mutate(NSUB = NA) %>%
+  mutate(CYTNUM = NA) %>%
+  mutate(PCTPOS = NA) %>%
+  mutate(NSUB_NEG = NA) %>%
+  mutate(CYTNUM_NEG = NA) %>%
+  mutate(PCTNEG = NA) %>%
+  select(BATCH, PTID, STIM, VISITNO, RUNNUM, RX_CODE, COHORT, NSUB, CYTNUM, combn, degree, NSUB_NEG, CYTNUM_NEG, PCTPOS, PCTNEG, PCTPOS_ADJ)
+identical(colnames(dt.summary.COMPASS), colnames(dt.tmp)) # TRUE
+dt.summary.COMPASS <- bind_rows(dt.summary.COMPASS, dt.tmp)
+
+#- Fig. (boxplot)
+order <- levels(grid_tbl$combn)
+dt.ggplot <- dt.summary.COMPASS %>%
+  mutate(VISITMONTH = case_when(VISITNO == "2" ~ "M0", .default = "M1/2")) %>%
+  mutate(x = factor(x = combn, levels = order)) %>%
+  filter(STIM == "Spike Ancestral")
+dt.ggplot %>%
+  filter(VISITMONTH != "M0") %>%
+  filter(RX_CODE == "AG2-1") %>%
+  mutate(COHORT = factor(x = COHORT, levels = c("case", "non-case"))) %>%
+  mutate(PCTPOS_ADJ = case_when(PCTPOS_ADJ < 0.001 ~ 0.001, .default = PCTPOS_ADJ)) %>%
+  ggplot() +
+    geom_boxplot(aes(x = x, y = PCTPOS_ADJ, fill = COHORT), outlier.color = "grey80") +
+    scale_fill_manual(values = c("non-case" = "#B2DF8A7F", "case" = "#B2DF8A"), 
+                      labels = c("Cases", "Non-cases")) +
+    scale_y_continuous(trans = "log10", 
+                       breaks = c(0.001, 0.01, 0.1, 1, 10), 
+                       labels = c("\u22640.001", "0.01", "0.1", "1", "10"), 
+                       limits = c(0.0009, 1.5)) +
+    labs(y = "% of CD4+ T cells\nBackground-subtracted", fill = NULL, title = "Spike Ancestral") +
+    theme_classic() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          axis.ticks.x = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 14),
+          title = element_text(size = 14)) -> plotA
+  
+#- Legend  
+g_legend <- function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+mylegend <- g_legend(plotA) 
+  
+#- Fig.
+plot_grid(plotA + theme(legend.position = "none"), 
+          plotB, 
+          align = "v", 
+          ncol = 1, 
+          rel_heights = c(5, 1.5)) -> plot.grid
+plot_grid(plot.grid, mylegend, ncol = 2, rel_widths = c(1, .2)) -> plot.output   
+cairo_pdf(file = "CD4+T_COMPASS_heatmap_Spike-Ancestral(3)_23JUN2025.pdf", width = 10, height = 6.25)
+plot.output
+dev.off()
+```
+
+## - **Spike BA4/5**
+
+For each sample we find the antigen that maximizes the **Functionality score**. Then we use that antigen's profile as the profile for the pooled response. This means the Functionality score is the max Functionality Score. The **Polyfunctionality score** is generally the max polyfunctionality score, but might not be if the ordering of the 2 scores differs.  
+
+* __Spike BA4/5__ = sum(BA.4-5 S1, BA.4-5 S2).  
+
+**Functionality score**
+
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS (mean)
+#- Data
+res.COMPASS_1 <- readRDS(file = "./tuning/BA.4-5 S1/CoVPN-3008_CD4+T_BA.4-5 S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS(file = "./tuning/BA.4-5 S2/CoVPN-3008_CD4+T_BA.4-5 S2_COMPASS-dx.rds")
+
+#- dt.ggplot (data.table())
+#- Data (dt.ggplot)
+dt.ggplot_1 <- scores(res.COMPASS_1$mean_model) %>%
+  mutate(STIM = "BA.4-5 S1") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_1" = "FS", "PFS_1" = "PFS")
+dt.ggplot_2 <- scores(res.COMPASS_2$mean_model) %>%
+  mutate(STIM = "BA.4-5 S2") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_2" = "FS", "PFS_2" = "PFS")
+dt.ggplot <- merge(x = dt.ggplot_1, 
+                   y = dt.ggplot_2 %>%
+                     select(ptid.visitno, FS_2, PFS_2), 
+                   by = "ptid.visitno") %>%
+  select(ptid.visitno, PTID, VISITNO, VISITMONTH, FS_1, PFS_1, FS_2, PFS_2)
+dt.ggplot <- dt.ggplot %>%
+  group_by(ptid.visitno) %>%
+  mutate(filt = c("BA.4-5 S1", "BA.4-5 S2")[which.max(c(FS_1, FS_2))]) %>%
+  mutate(FS_final = c(FS_1, FS_2)[which.max(c(FS_1, FS_2))]) %>%
+  mutate(PFS_final = c(PFS_1, PFS_2)[which.max(c(FS_1, FS_2))])
+# dt.ggplot <- read_csv(file = "./dt_COMPASS_Spike BA4-5.csv")
+dt.ggplot <- dt.ggplot %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE))
+dt.ggplot$STIM <- "Spike BA4/5"
+# dt.ggplot %>%
+#   mutate(STIM_1 = "BA.4-5 S1") %>%
+#   mutate(STIM_2 = "BA.4-5 S2") %>%
+#   ungroup() %>%
+#   select(PTID, VISITNO, STIM, STIM_1, STIM_2, FS_1, FS_2, PFS_1, PFS_2, filt, FS_final, PFS_final) %>%
+#   write_csv(file = "dt_COMPASS_Spike BA4-5.csv")
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- Fig.
+#- Data
+dt.ggplot <- dt.ggplot %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITMONTH, from = c("M0", "M1", "M2"), to = c("M0", "M1/2", "M1/2"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          STIM == "BA.4-5 S1" ~ "BA4/5 S1",
+                          STIM == "BA.4-5 S2" ~ "BA4/5 S2",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH"))) %>%
+  mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                       VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                       VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                       VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                       .default = "Post two\nvaccinations")) %>%
+ mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2")))
+  
+#- Fig.
+set.seed(1234)
+dt.ggplot %>%
+  ggplot() +
+    geom_point(aes(x = X, y = FS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_line(aes(x = X, y = FS_final, color = COLOR_LINE, group = PTID), 
+              position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+              linewidth = .2, alpha = .7) +
+    geom_boxplot(aes(x = X, y = FS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+    scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2"),
+                     labels = c("Baseline", "Post two\nvaccinations", "Baseline", "Post one\nvaccination"), 
+                     drop = TRUE) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                 "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Functionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_FS_Spike BA4-5(1).pdf", width = 6, height = 6.25)
+plot
+dev.off()
+
+#- Fig. (2)
+set.seed(1234)
+dt.ggplot %>%
+  mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                              VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                              .default = "Post two\nvaccinations")) %>%
+  mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+  ggplot() +
+    geom_point(aes(x = COHORT, y = FS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_boxplot(aes(x = COHORT, y = FS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                 "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Functionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_FS_Spike BA4-5(2).pdf", width = 10, height = 7.25)
+plot
+dev.off()
+```
+
+**PolyFunctionality score**
+
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- Fig.
+#- Fig. (1)
+set.seed(1234)
+dt.ggplot %>%
+  ggplot() +
+    geom_point(aes(x = X, y = PFS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_line(aes(x = X, y = PFS_final, color = COLOR_LINE, group = PTID), 
+              position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+              linewidth = .2, alpha = .7) +
+    geom_boxplot(aes(x = X, y = PFS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+    scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2"),
+                      labels = c("Baseline", "Post two\nvaccinations", "Baseline", "Post one\nvaccination"), 
+                      drop = TRUE) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                 "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Polyfunctionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_PFS_Spike BA4-5(1).pdf", width = 6, height = 6.25)
+plot
+dev.off()
+
+#- Fig. (2)
+set.seed(1234)
+dt.ggplot %>%
+  mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                              VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                              VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                              .default = "Post two\nvaccinations")) %>%
+  mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+  ggplot() +
+    geom_point(aes(x = COHORT, y = PFS_final, fill = FILL_BX, group = PTID), 
+               position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+               size = 3, alpha = .7, pch = 21, color = "white") +
+    geom_boxplot(aes(x = COHORT, y = PFS_final, fill = FILL_BX),
+                 alpha = .75, width = .5, outlier.shape = NA) +
+    facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                "#B2DF8A" = "#B2DF8A", 
+                                 "#FB9A99" = "#FB9A99", 
+                                 "#FDBF6F" = "#FDBF6F", 
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                  "#B2DF8A" = "#B2DF8A", 
+                                  "#FB9A99" = "#FB9A99", 
+                                  "#FDBF6F" = "#FDBF6F", 
+                                  "white" = "white"), guide = "none") +
+    labs(x = NULL, 
+         y = "Polyfunctionality score", 
+         title = paste("ICS: CD4+ T\nSTIM:", unique(dt.ggplot$STIM))) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          strip.text = element_text(size = 16),
+          title = element_text(size = 16),
+          legend.position = "none") -> plot
+cairo_pdf(file = "CD4+T_COMPASS_PFS_Spike BA4-5(2).pdf", width = 10, height = 7.25)
+plot
+dev.off()
+```
+
+**Case-cohort**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Fig. 1 (cases vs. non-cases)
+dt.ggplot <- dt.ggplot %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          STIM == "BA.4-5 S1" ~ "BA4/5 S1",
+                          STIM == "BA.4-5 S2" ~ "BA4/5 S2",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS-CoV-2-", .default = "SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS-CoV-2-", "SARS-CoV-2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1", "AG2-2") ~ "HIV+", .default = "HIV-")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("HIV+", "HIV-"))) %>%
+  filter(RX_CODE == "AG2-1")
+
+#- Fig. (a)
+cairo_pdf(file = "COMPASS_CC_Fig_2(a)_MAY-2025.pdf", 
+    width = 8, 
+    height = 6, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike BA4/5") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(FACET_X2 = case_when(VISITNO == "2" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                VISITNO == "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                .default = "Post two\nvaccinations")) %>%
+    mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+    mutate(COHORT = factor(x = COHORT, levels = c("1", "0")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = COHORT, y = FS_final, fill = FILL_BX, group = PTID), color = "white",
+                 position = position_jitterdodge(jitter.width = .2, dodge.width = .5, seed = 123),
+                 pch = 21, size = 3, alpha = .7) +
+      geom_boxplot(aes(x = COHORT, y = FS_final, fill = FILL_BX),
+                   alpha = .25, width = .5, outlier.shape = NA) +
+      geom_violin(aes(x = COHORT, y = FS_final, color = FILL_BX),
+                  alpha = 0) +
+      facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("1", "0"),
+                       labels = c("Cases", "Non-cases")) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "white" = "white"), guide = "none") +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score", 
+           fill = NULL,
+           shape = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 12),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.text = element_text(size = 14),
+            legend.position = "bottom") -> plot
+  plot %>% print()
+} 
+dev.off()
+
+#- Fig. (a)
+cairo_pdf(file = "COMPASS_CC_Fig_2(a_!M0)_MAY-2025.pdf", 
+    width = 4.5, 
+    height = 5.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike BA4/5") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(VISITNO != 2) %>%
+    filter(STIM == i) %>%
+    mutate(FACET_X2 = case_when(VISITNO == "2" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                VISITNO == "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                .default = "Post two\nvaccinations")) %>%
+    mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+    mutate(COHORT = factor(x = COHORT, levels = c("case", "non-case")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = COHORT, y = FS_final, fill = FILL_BX, group = PTID), color = "white",
+                 position = position_jitterdodge(jitter.width = .2, dodge.width = .5, seed = 123),
+                 pch = 21, size = 3, alpha = .7) +
+      geom_boxplot(aes(x = COHORT, y = FS_final, fill = FILL_BX),
+                   alpha = .25, width = .5, outlier.shape = NA) +
+      geom_violin(aes(x = COHORT, y = FS_final, color = FILL_BX),
+                  alpha = 0) +
+      facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("case", "non-case"),
+                       labels = c("Cases", "Non-cases")) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "white" = "white"), guide = "none") +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score", 
+           fill = NULL,
+           shape = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 12),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.text = element_text(size = 14),
+            legend.position = "bottom") -> plot
+  plot %>% print()
+} 
+dev.off()
+
+#- Fig. (b)
+cairo_pdf(file = "COMPASS_CC_Fig_2(b)_MAY-2025.pdf", 
+    width = 8, 
+    height = 6, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike BA4/5") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(FACET_X2 = case_when(VISITNO == "2" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                VISITNO == "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                VISITNO != "2" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                .default = "Post two\nvaccinations")) %>%
+    mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination"))) %>%
+    mutate(COHORT = factor(x = COHORT, levels = c("1", "0")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = COHORT, y = PFS_final, fill = FILL_BX, group = PTID), color = "white",
+                 position = position_jitterdodge(jitter.width = .2, dodge.width = .5, seed = 123),
+                 pch = 21, size = 3, alpha = .7) +
+      geom_boxplot(aes(x = COHORT, y = PFS_final, fill = FILL_BX),
+                   alpha = .25, width = .5, outlier.shape = NA) +
+      geom_violin(aes(x = COHORT, y = PFS_final, color = FILL_BX),
+                  alpha = 0) +
+      facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("1", "0"),
+                       labels = c("Cases", "Non-cases")) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "white" = "white"), guide = "none") +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Polyfunctionality score", 
+           fill = NULL,
+           shape = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.title.x = element_text(size = 14),
+            axis.title.y = element_text(size = 12),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.text = element_text(size = 14),
+            legend.position = "bottom") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+
+**Heatmap / Boxplot**
+
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS
+#- COMPASS
+res.COMPASS_1 <- readRDS(file = "./tuning/BA.4-5 S1/CoVPN-3008_CD4+T_BA.4-5 S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS(file = "./tuning/BA.4-5 S2/CoVPN-3008_CD4+T_BA.4-5 S2_COMPASS-dx.rds")
+
+#- Packages
+# remotes::install_github("SATVILab/UtilsCompassSV")
+library(UtilsCompassSV)
+
+#- Cyt.
+# Function pp_tbl_f
+pp_tbl_f <- function(x = x, i = 1){
+  pp_mat <- x$fit$mean_gamma
+  colnames(pp_mat) <- convert_cyt_combn_format(colnames(pp_mat), to = "std")
+  colnames(pp_mat) <- str_remove_all(string = colnames(pp_mat), pattern = " V450| APC| BB700| BB630| PE[-]Cy7| PE[-]CF594| BUV737| BUV395")
+  pp_tbl <- tibble::as_tibble(pp_mat)
+  pp_tbl$id <- rownames(x$fit$mean_gamma)
+  pp_tbl %>% 
+    tidyr::pivot_longer(-id, names_to = "combn", values_to = "prob") %>%
+    dplyr::mutate(.grp = names(c_obj)[i]) -> pp_tbl
+  pp_tbl %>% return()
+}
+pp_tbl_f(x = res.COMPASS_1$mean_model)
+# Function filtering_f
+combn_sel_vec_f <- function(x = x, prob_min = 0.8, quant_min = 0.25){
+  combn_sel_vec <- x %>%
+    dplyr::filter(str_detect(string = combn, pattern = "[[+]]")) %>%
+    dplyr::group_by(combn, .grp) %>%
+    dplyr::filter(quantile(prob, prob_min) >= quant_min) %>%
+    magrittr::extract2("combn") %>%
+    unique()
+  combn_sel_vec %>% return()
+}
+# Cyt. in common
+pp_tbl_1 <- pp_tbl_f(x = res.COMPASS_1$mean_model)
+pp_tbl_2 <- pp_tbl_f(x = res.COMPASS_2$mean_model)
+combn_sel_vec_1 <- combn_sel_vec_f(x = pp_tbl_1)
+combn_sel_vec_2 <- combn_sel_vec_f(x = pp_tbl_2)
+setdiff(combn_sel_vec_1, combn_sel_vec_2)
+setdiff(combn_sel_vec_2, combn_sel_vec_1)
+combn_sel_vec <- unique(c(combn_sel_vec_1, combn_sel_vec_2))
+
+#- Plot GRID
+# Calculate degree of each cytokine combination
+degree_lab_vec <- purrr::map_chr(combn_sel_vec, function(combn) {
+    nrow(stringr::str_locate_all(combn, "[[+]]")[[1]])
+  }) %>%
+  setNames(combn_sel_vec)
+degree_lab_vec
+pp_tbl <- bind_rows(pp_tbl_1, pp_tbl_2) %>%
+  filter(!duplicated(paste(id, combn)))
+pp_tbl <- pp_tbl %>%
+  dplyr::filter(combn %in% combn_sel_vec) %>%
+  dplyr::mutate(degree = degree_lab_vec[combn])
+# Order cyt combns within each degree by post probs
+combn_factor_levels_vec <- pp_tbl %>%
+  dplyr::group_by(degree, combn, .grp) %>%
+  dplyr::summarise(quant = quantile(prob, 0.75), .groups = "drop") %>%
+  dplyr::group_by(degree, combn) %>%
+  dplyr::filter(quant == max(quant)) %>%
+  dplyr::slice(1) %>%
+  dplyr::group_by(degree) %>%
+  dplyr::arrange(quant, .by_group = TRUE) %>%
+  dplyr::ungroup() %>%
+  magrittr::extract2("combn")
+pp_tbl <- pp_tbl %>%
+    dplyr::mutate(combn = factor(.data$combn, levels = combn_factor_levels_vec))
+# Create grid tbl
+cyt_order <- c("TNFa", "IL21", "IL17a", "IL5/IL13", "IL4", "IL2", "IFNg", "CD154")
+grid_tbl <- pp_tbl %>%
+  dplyr::select(combn, degree) %>%
+  dplyr::group_by(combn, degree) %>%
+  dplyr::slice(1) %>%
+  dplyr::ungroup()
+for(cyt in cyt_order) {
+  grid_tbl[[cyt]] <- as.character(stringr::str_detect(grid_tbl$combn, paste0(cyt, "[[+]]")))
+}
+grid_tbl %>%
+  tidyr::pivot_longer(-c(combn, degree), names_to = "cyt", values_to = "expressed") %>%
+  dplyr::mutate(cyt = factor(.data$cyt, levels = cyt_order)) -> grid_tbl
+# Set up colors
+dt.ggplot <- grid_tbl %>%
+  dplyr::mutate(expr_degree = paste0(expressed, degree))
+dt.ggplot$expr_degree %>% unique()
+my.colors <- c(RColorBrewer::brewer.pal(n = length(unique(dt.ggplot$degree)), name = "Paired"), 
+               rep("white", length(unique(dt.ggplot$degree))))
+names(my.colors) <- c(paste0("TRUE", 1:length(unique(dt.ggplot$degree))),
+                      paste0("FALSE", 1:length(unique(dt.ggplot$degree))))
+# Fig.
+dt.ggplot %>%
+  mutate(cyt = case_when(cyt == "TNFa" ~ "TNF", .default = cyt)) %>%
+  mutate(cyt = factor(x = cyt, levels = c("TNF", "IL21", "IL17a", "IL5/IL13", "IL4", "IL2", "IFNg", "CD154"))) %>%
+  ggplot(aes(x = combn, y = cyt, fill = expr_degree)) +
+    geom_tile(col = "black") +
+    scale_fill_manual(values = my.colors) +
+    theme_classic() +
+    theme(legend.position = "none",
+          axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          axis.ticks = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank()) -> plotB
+plotB
+
+#- Magnitude
+load(file = "./001_High-Dimensional-ICS-Analysis_CD4+T.RData")
+dt <- dt %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"), 
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"),
+                                  warn_missing = FALSE))
+# Cyt.
+grid_tbl <- pp_tbl %>%
+  dplyr::select(combn, degree) %>%
+  dplyr::group_by(combn, degree) %>%
+  dplyr::slice(1) %>%
+  dplyr::ungroup()
+for(cyt in cyt_order) {
+  grid_tbl[[cyt]] <- as.character(stringr::str_detect(grid_tbl$combn, paste0(cyt, "[[+]]")))
+}
+# Data
+foreach(i = 1:nrow(grid_tbl)) %do% {
+  # cbmn
+  cmbn.tmp <- do.call(paste, c(grid_tbl[i, 3:ncol(grid_tbl)], sep = "_"))
+  degree.tmp <- grid_tbl$degree[i]
+  # dt
+  dt.tmp <- dt %>%
+    select(BATCH, PTID, STIM, VISITNO, RUNNUM, REPLICATE, RX_CODE, COHORT, NSUB, 
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/TNFa+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL21+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL17a+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL5_OR_IL13+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL4+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IL2+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/IFNg+`,
+           `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+/154+`)
+  dt.tmp$CYT <- do.call(paste, c(dt.tmp[, 10:ncol(dt.tmp)], sep = "_"))
+  # summary      
+  levels.tmp <- expand.grid(replicate(8, c(TRUE, FALSE), simplify = FALSE))
+  levels.tmp <- levels.tmp %>%
+    rowwise() %>%
+    mutate(combined = paste(c_across(everything()), collapse = "_")) %>%
+    ungroup() %>%
+    pull(combined)
+  dt.summary.tmp <- dt.tmp %>%
+    mutate(CYT = factor(x = CYT, levels = levels.tmp)) %>%
+    group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, REPLICATE, RX_CODE, COHORT, NSUB, CYT, .drop = FALSE) %>%
+    summarise(CYTNUM = n()) %>%
+    filter(CYT == cmbn.tmp) %>%
+    group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, RX_CODE, COHORT, .drop = FALSE) %>%
+    summarise(NSUB = sum(NSUB), CYTNUM = sum(CYTNUM)) %>%
+    ungroup()
+  setdiff(paste(dt.summary_Rhino$PTID, dt.summary_Rhino$STIM, dt.summary_Rhino$VISITNO),
+          paste(dt.summary.tmp$PTID, dt.summary.tmp$STIM, dt.summary.tmp$VISITNO)) %>%
+    print()
+  dt.summary.tmp$combn <- grid_tbl$combn[i]
+  dt.summary.tmp$degree <- degree.tmp
+  dt.summary.tmp %>% return()
+} %>%
+  bind_rows() -> dt.summary.COMPASS
+# PCTPOS_ADJ
+dt.tmp_1 <- dt.summary.COMPASS %>%
+  mutate(SAMPLE = paste(BATCH, PTID, VISITNO, combn)) %>%
+  filter(STIM == "negctrl") %>%
+  rename(NSUB_NEG = "NSUB", CYTNUM_NEG = "CYTNUM") %>%
+  select(SAMPLE, NSUB_NEG, CYTNUM_NEG) 
+dt.tmp_2 <- dt.summary.COMPASS %>%
+  mutate(SAMPLE = paste(BATCH, PTID, VISITNO, combn)) %>%
+  filter(STIM != "negctrl")
+dt.summary.COMPASS <- merge(x = dt.tmp_2, y = dt.tmp_1, by = "SAMPLE", all.x = TRUE) %>%
+  mutate(PCTPOS = (CYTNUM / NSUB) * 100) %>%
+  mutate(PCTNEG = (CYTNUM_NEG / NSUB_NEG) * 100) %>%
+  mutate(PCTPOS_ADJ = PCTPOS - PCTNEG) %>%
+  arrange(BATCH, PTID, STIM, VISITNO) %>%
+  ungroup() %>%
+  select(-SAMPLE)
+
+#- Combined (Spike BA4/5)
+dt.tmp <- dt.summary.COMPASS %>%
+  filter(STIM %in% c("BA.4-5 S1", "BA.4-5 S2")) %>%
+  group_by(PTID, VISITNO, RUNNUM, RX_CODE, COHORT, combn, degree) %>%
+  filter(n() == 2) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0, 0, PCTPOS_ADJ)) %>%
+  summarize(PCTPOS_ADJ = sum(PCTPOS_ADJ, na.rm = TRUE)) %>%
+  mutate(STIM = "Spike BA4/5")
+#- Add results to table
+dt.tmp <- dt.tmp %>%
+  mutate(BATCH = NA) %>%
+  mutate(NSUB = NA) %>%
+  mutate(CYTNUM = NA) %>%
+  mutate(PCTPOS = NA) %>%
+  mutate(NSUB_NEG = NA) %>%
+  mutate(CYTNUM_NEG = NA) %>%
+  mutate(PCTNEG = NA) %>%
+  select(BATCH, PTID, STIM, VISITNO, RUNNUM, RX_CODE, COHORT, NSUB, CYTNUM, combn, degree, NSUB_NEG, CYTNUM_NEG, PCTPOS, PCTNEG, PCTPOS_ADJ)
+identical(colnames(dt.summary.COMPASS), colnames(dt.tmp)) # TRUE
+dt.summary.COMPASS <- bind_rows(dt.summary.COMPASS, dt.tmp)
+
+#- Fig. (boxplot)
+order <- levels(grid_tbl$combn)
+dt.ggplot <- dt.summary.COMPASS %>%
+  mutate(VISITMONTH = case_when(VISITNO == "2" ~ "M0", .default = "M1/2")) %>%
+  mutate(x = factor(x = combn, levels = order)) %>%
+  filter(STIM == "Spike BA4/5")
+dt.ggplot %>%
+  filter(VISITMONTH != "M0") %>%
+  filter(RX_CODE == "AG2-1") %>%
+  mutate(COHORT = factor(x = COHORT, levels = c("case", "non-case"))) %>%
+  mutate(PCTPOS_ADJ = case_when(PCTPOS_ADJ < 0.001 ~ 0.001, .default = PCTPOS_ADJ)) %>%
+  ggplot() +
+    geom_boxplot(aes(x = x, y = PCTPOS_ADJ, fill = COHORT), outlier.color = "grey80") +
+    scale_fill_manual(values = c("non-case" = "#B2DF8A7F", "case" = "#B2DF8A"), 
+                      labels = c("Cases", "Non-cases")) +
+    scale_y_continuous(trans = "log10", 
+                       breaks = c(0.001, 0.01, 0.1, 1, 10), 
+                       labels = c("\u22640.001", "0.01", "0.1", "1", "10"), 
+                       limits = c(0.0009, 1)) +
+    labs(y = "% of CD4+ T cells\nBackground-subtracted", fill = NULL, title = "Spike BA4/5") +
+    theme_classic() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 12),
+          axis.ticks.x = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 14),
+          title = element_text(size = 14)) -> plotA
+  
+#- Legend  
+g_legend <- function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+mylegend <- g_legend(plotA) 
+  
+#- Fig.
+plot_grid(plotA + theme(legend.position = "none"), 
+          plotB, 
+          align = "v", 
+          ncol = 1, 
+          rel_heights = c(5, 1.5)) -> plot.grid
+plot_grid(plot.grid, mylegend, ncol = 2, rel_widths = c(1, .2)) -> plot.output   
+cairo_pdf(file = "CD4+T_COMPASS_heatmap_Spike-BA45(3)_18AUG2025.pdf", width = 10, height = 6.25)
+plot.output
+dev.off()
+```
+

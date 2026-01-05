@@ -1,0 +1,691 @@
+---
+title: "- ICS - `COMPASS` -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(cowplot)
+library(data.table)
+library(doMC)
+library(COMPASS)
+```
+
+# - Suppl. Fig. 3C
+__________________
+ 
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS (mean)
+#- meta.data
+meta.data <- read_csv(file = "./CoVPN-3008_ICS_group.csv") %>%
+  mutate(RX_CODE = case_when(agrp2n == "1" ~ "Group 1",
+                             agrp2n == "2.1" ~ "Group 2-I",
+                             agrp2n == "2.2" ~ "Group 2-II",
+                             agrp2n == "3" ~ "Group 3",
+                             agrp2n == "4.1" ~ "Group 4-I",
+                             agrp2n == "4.2" ~ "Group 4-II",
+                             .default = NA)) %>%
+  mutate(RX = case_when(agrp2n == "1" ~ "HIV+, SARS-CoV-2-, 2d",
+                        agrp2n == "2.1" ~ "HIV+, SARS-CoV-2+, 1d",
+                        agrp2n == "2.2" ~ "HIV+, SARS-CoV-2+, 2d",
+                        agrp2n == "3" ~ "HIV-, SARS-CoV-2-, 2d",
+                        agrp2n == "4.1" ~ "HIV-, SARS-CoV-2+, 1d",
+                        agrp2n == "4.2" ~ "HIV-, SARS-CoV-2+, 2d",
+                        .default = NA))
+
+#- Data
+res.COMPASS_1 <- readRDS("./tuning/COV2 CON S1/CoVPN-3008_CD4+T_COV2 CON S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS("./tuning/COV2 CON S2/CoVPN-3008_CD4+T_COV2 CON S2_COMPASS-dx.rds")
+
+#- dt.ggplot (data.table())
+#- Data (dt.ggplot)
+dt.ggplot_1 <- scores(res.COMPASS_1$mean_model) %>%
+  mutate(STIM = "COV2 CON S1") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_1" = "FS", "PFS_1" = "PFS")
+dt.ggplot_2 <- scores(res.COMPASS_2$mean_model) %>%
+  mutate(STIM = "COV2 CON S2") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_2" = "FS", "PFS_2" = "PFS")
+dt.ggplot_1$ptid.visitno %>% unique() %>% length() # 422 unique samples
+identical(dt.ggplot_1$ptid.visitno, dt.ggplot_2$ptid.visitno) # TRUE
+dt.ggplot <- merge(x = dt.ggplot_1, 
+                   y = dt.ggplot_2 %>%
+                     select(ptid.visitno, FS_2, PFS_2), 
+                   by = "ptid.visitno") %>%
+  select(ptid.visitno, PTID, VISITNO, VISITMONTH, FS_1, PFS_1, FS_2, PFS_2)
+dt.ggplot <- dt.ggplot %>%
+  group_by(ptid.visitno) %>%
+  mutate(filt = c("COV2 CON S1", "COV2 CON S2")[which.max(c(FS_1, FS_2))]) %>%
+  mutate(FS_final = c(FS_1, FS_2)[which.max(c(FS_1, FS_2))]) %>%
+  mutate(PFS_final = c(PFS_1, PFS_2)[which.max(c(FS_1, FS_2))])
+dt.ggplot$RX_CODE <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX_CODE)
+dt.ggplot$RX <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX)
+dt.ggplot$STIM <- "Spike Ancestral"
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt.ggplot %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" ~ "#33A02C",
+                              RX_CODE %in% "AG3" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG2-2" ~ "#33A02C",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white"))
+dt.ggplot <- dt.ggplot %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+")))
+
+#- Fig.
+cairo_pdf(file = "Supp_Fig_3C.pdf", 
+    width = 15, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike Ancestral") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", 
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = X, y = FS_final, fill = FILL_PCH, group = PTID), 
+                 color = "white", 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = 3, alpha = 1, pch = 21) +
+      geom_line(aes(x = X, y = FS_final, color = COLOR_LINE, group = PTID), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = .2, alpha = .7) +
+      geom_boxplot(aes(x = X, y = FS_final, fill = FILL_BX),
+                   alpha = .5, width = .5, outlier.shape = NA) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV+, SARS-CoV-2+")) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV-, SARS-CoV-2+")) +
+      facet_grid(~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations",  
+                                  "Baseline_2", "Post one\nvaccination_2",
+                                  "Baseline_3", "Post two\nvaccinations_3"),
+                       labels = c("Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post one\nvaccination",
+                                  "Baseline", "Post two\nvaccinations")) +
+      scale_y_continuous(limits = c(0.005, 0.07), expand=expansion(add=0)) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#33A02C" = "#33A02C",
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "#FF7F00" = "#FF7F00")) +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#33A02C" = "#33A02C", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "#FF7F00" = "#FF7F00", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score (CD4+ T)\nCOMPASS", 
+           fill = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 12),
+            axis.title = element_text(size = 14),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.position = "none") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+ 
+# - Fig. 3C
+___________
+ 
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS (mean)
+#- meta.data
+meta.data <- read_csv(file = "./CoVPN-3008_ICS_group.csv") %>%
+  mutate(RX_CODE = case_when(agrp2n == "1" ~ "Group 1",
+                             agrp2n == "2.1" ~ "Group 2-I",
+                             agrp2n == "2.2" ~ "Group 2-II",
+                             agrp2n == "3" ~ "Group 3",
+                             agrp2n == "4.1" ~ "Group 4-I",
+                             agrp2n == "4.2" ~ "Group 4-II",
+                             .default = NA)) %>%
+  mutate(RX = case_when(agrp2n == "1" ~ "HIV+, SARS-CoV-2-, 2d",
+                        agrp2n == "2.1" ~ "HIV+, SARS-CoV-2+, 1d",
+                        agrp2n == "2.2" ~ "HIV+, SARS-CoV-2+, 2d",
+                        agrp2n == "3" ~ "HIV-, SARS-CoV-2-, 2d",
+                        agrp2n == "4.1" ~ "HIV-, SARS-CoV-2+, 1d",
+                        agrp2n == "4.2" ~ "HIV-, SARS-CoV-2+, 2d",
+                        .default = NA))
+
+#- Data
+res.COMPASS_1 <- readRDS("./tuning/BA.4-5 S1/CoVPN-3008_CD4+T_BA.4-5 S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS("./tuning/BA.4-5 S2/CoVPN-3008_CD4+T_BA.4-5 S2_COMPASS-dx.rds")
+
+#- dt.ggplot (data.table())
+#- Data (dt.ggplot)
+dt.ggplot_1 <- scores(res.COMPASS_1$mean_model) %>%
+  mutate(STIM = "BA.4-5 S1") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_1" = "FS", "PFS_1" = "PFS")
+dt.ggplot_2 <- scores(res.COMPASS_2$mean_model) %>%
+  mutate(STIM = "BA.4-5 S2") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_2" = "FS", "PFS_2" = "PFS")
+dt.ggplot_1$ptid.visitno %>% unique() %>% length() # 422 unique samples
+identical(dt.ggplot_1$ptid.visitno, dt.ggplot_2$ptid.visitno) # TRUE
+dt.ggplot <- merge(x = dt.ggplot_1, 
+                   y = dt.ggplot_2 %>%
+                     select(ptid.visitno, FS_2, PFS_2), 
+                   by = "ptid.visitno") %>%
+  select(ptid.visitno, PTID, VISITNO, VISITMONTH, FS_1, PFS_1, FS_2, PFS_2)
+dt.ggplot <- dt.ggplot %>%
+  group_by(ptid.visitno) %>%
+  mutate(filt = c("BA.4-5 S1", "BA.4-5 S2")[which.max(c(FS_1, FS_2))]) %>%
+  mutate(FS_final = c(FS_1, FS_2)[which.max(c(FS_1, FS_2))]) %>%
+  mutate(PFS_final = c(PFS_1, PFS_2)[which.max(c(FS_1, FS_2))])
+dt.ggplot$RX_CODE <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX_CODE)
+dt.ggplot$RX <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX)
+dt.ggplot$STIM <- "Spike BA4/5"
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt.ggplot %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" ~ "#33A02C",
+                              RX_CODE %in% "AG3" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG2-2" ~ "#33A02C",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white"))
+dt.ggplot <- dt.ggplot %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+")))
+
+#- Fig.
+cairo_pdf(file = "Fig_3C.pdf", 
+    width = 15, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike BA4/5") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", 
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = X, y = FS_final, fill = FILL_PCH, group = PTID), 
+                 color = "white", 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = 3, alpha = 1, pch = 21) +
+      geom_line(aes(x = X, y = FS_final, color = COLOR_LINE, group = PTID), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = .2, alpha = .7) +
+      geom_boxplot(aes(x = X, y = FS_final, fill = FILL_BX),
+                   alpha = .5, width = .5, outlier.shape = NA) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV+, SARS-CoV-2+")) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV-, SARS-CoV-2+")) +
+      facet_grid(~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations",  
+                                  "Baseline_2", "Post one\nvaccination_2",
+                                  "Baseline_3", "Post two\nvaccinations_3"),
+                       labels = c("Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post one\nvaccination",
+                                  "Baseline", "Post two\nvaccinations")) +
+      scale_y_continuous(limits = c(0.005, 0.07), expand=expansion(add=0)) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#33A02C" = "#33A02C",
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "#FF7F00" = "#FF7F00")) +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#33A02C" = "#33A02C", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "#FF7F00" = "#FF7F00", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score (CD4+ T)\nCOMPASS", 
+           fill = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 12),
+            axis.title = element_text(size = 14),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.position = "none") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+
+# - Suppl. Fig. 3D
+__________________
+ 
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS (mean)
+#- meta.data
+meta.data <- read_csv(file = "./CoVPN-3008_ICS_group.csv") %>%
+  mutate(RX_CODE = case_when(agrp2n == "1" ~ "Group 1",
+                             agrp2n == "2.1" ~ "Group 2-I",
+                             agrp2n == "2.2" ~ "Group 2-II",
+                             agrp2n == "3" ~ "Group 3",
+                             agrp2n == "4.1" ~ "Group 4-I",
+                             agrp2n == "4.2" ~ "Group 4-II",
+                             .default = NA)) %>%
+  mutate(RX = case_when(agrp2n == "1" ~ "HIV+, SARS-CoV-2-, 2d",
+                        agrp2n == "2.1" ~ "HIV+, SARS-CoV-2+, 1d",
+                        agrp2n == "2.2" ~ "HIV+, SARS-CoV-2+, 2d",
+                        agrp2n == "3" ~ "HIV-, SARS-CoV-2-, 2d",
+                        agrp2n == "4.1" ~ "HIV-, SARS-CoV-2+, 1d",
+                        agrp2n == "4.2" ~ "HIV-, SARS-CoV-2+, 2d",
+                        .default = NA))
+
+#- Data
+res.COMPASS_1 <- readRDS("./tuning/COV2 CON S1/CoVPN-3008_CD8+T_COV2 CON S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS("./tuning/COV2 CON S2/CoVPN-3008_CD8+T_COV2 CON S2_COMPASS-dx.rds")
+
+#- dt.ggplot (data.table())
+#- Data (dt.ggplot)
+dt.ggplot_1 <- scores(res.COMPASS_1$mean_model) %>%
+  mutate(STIM = "COV2 CON S1") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_1" = "FS", "PFS_1" = "PFS")
+dt.ggplot_2 <- scores(res.COMPASS_2$mean_model) %>%
+  mutate(STIM = "COV2 CON S2") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_2" = "FS", "PFS_2" = "PFS")
+dt.ggplot_1$ptid.visitno %>% unique() %>% length() # 422 unique samples
+identical(dt.ggplot_1$ptid.visitno, dt.ggplot_2$ptid.visitno) # TRUE
+dt.ggplot <- merge(x = dt.ggplot_1, 
+                   y = dt.ggplot_2 %>%
+                     select(ptid.visitno, FS_2, PFS_2), 
+                   by = "ptid.visitno") %>%
+  select(ptid.visitno, PTID, VISITNO, VISITMONTH, FS_1, PFS_1, FS_2, PFS_2)
+dt.ggplot <- dt.ggplot %>%
+  group_by(ptid.visitno) %>%
+  mutate(filt = c("COV2 CON S1", "COV2 CON S2")[which.max(c(FS_1, FS_2))]) %>%
+  mutate(FS_final = c(FS_1, FS_2)[which.max(c(FS_1, FS_2))]) %>%
+  mutate(PFS_final = c(PFS_1, PFS_2)[which.max(c(FS_1, FS_2))])
+dt.ggplot$RX_CODE <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX_CODE)
+dt.ggplot$RX <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX)
+dt.ggplot$STIM <- "Spike Ancestral"
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt.ggplot %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" ~ "#33A02C",
+                              RX_CODE %in% "AG3" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG2-2" ~ "#33A02C",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white"))
+dt.ggplot <- dt.ggplot %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+")))
+
+#- Fig.
+cairo_pdf(file = "Supp_Fig_3D.pdf", 
+    width = 15, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike Ancestral") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", 
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = X, y = FS_final, fill = FILL_PCH, group = PTID), 
+                 color = "white", 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = 3, alpha = 1, pch = 21) +
+      geom_line(aes(x = X, y = FS_final, color = COLOR_LINE, group = PTID), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = .2, alpha = .7) +
+      geom_boxplot(aes(x = X, y = FS_final, fill = FILL_BX),
+                   alpha = .5, width = .5, outlier.shape = NA) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV+, SARS-CoV-2+")) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV-, SARS-CoV-2+")) +
+      facet_grid(~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations",  
+                                  "Baseline_2", "Post one\nvaccination_2",
+                                  "Baseline_3", "Post two\nvaccinations_3"),
+                       labels = c("Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post one\nvaccination",
+                                  "Baseline", "Post two\nvaccinations")) +
+      scale_y_continuous(limits = c(0.005, 0.07), expand=expansion(add=0)) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#33A02C" = "#33A02C",
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "#FF7F00" = "#FF7F00")) +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#33A02C" = "#33A02C", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "#FF7F00" = "#FF7F00", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score (CD8+ T)\nCOMPASS", 
+           fill = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 12),
+            axis.title = element_text(size = 14),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.position = "none") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+ 
+# - Fig. 3D
+___________
+ 
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+###--- COMPASS (mean)
+#- meta.data
+meta.data <- read_csv(file = "./CoVPN-3008_ICS_group.csv") %>%
+  mutate(RX_CODE = case_when(agrp2n == "1" ~ "Group 1",
+                             agrp2n == "2.1" ~ "Group 2-I",
+                             agrp2n == "2.2" ~ "Group 2-II",
+                             agrp2n == "3" ~ "Group 3",
+                             agrp2n == "4.1" ~ "Group 4-I",
+                             agrp2n == "4.2" ~ "Group 4-II",
+                             .default = NA)) %>%
+  mutate(RX = case_when(agrp2n == "1" ~ "HIV+, SARS-CoV-2-, 2d",
+                        agrp2n == "2.1" ~ "HIV+, SARS-CoV-2+, 1d",
+                        agrp2n == "2.2" ~ "HIV+, SARS-CoV-2+, 2d",
+                        agrp2n == "3" ~ "HIV-, SARS-CoV-2-, 2d",
+                        agrp2n == "4.1" ~ "HIV-, SARS-CoV-2+, 1d",
+                        agrp2n == "4.2" ~ "HIV-, SARS-CoV-2+, 2d",
+                        .default = NA))
+
+#- Data
+res.COMPASS_1 <- readRDS("./tuning/BA.4-5 S1/CoVPN-3008_CD8+T_BA.4-5 S1_COMPASS-dx.rds")
+res.COMPASS_2 <- readRDS("./tuning/BA.4-5 S2/CoVPN-3008_CD8+T_BA.4-5 S2_COMPASS-dx.rds")
+
+#- dt.ggplot (data.table())
+#- Data (dt.ggplot)
+dt.ggplot_1 <- scores(res.COMPASS_1$mean_model) %>%
+  mutate(STIM = "BA.4-5 S1") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_1" = "FS", "PFS_1" = "PFS")
+dt.ggplot_2 <- scores(res.COMPASS_2$mean_model) %>%
+  mutate(STIM = "BA.4-5 S2") %>%
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", .default = VISITNO)) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  rename("FS_2" = "FS", "PFS_2" = "PFS")
+dt.ggplot_1$ptid.visitno %>% unique() %>% length() # 422 unique samples
+identical(dt.ggplot_1$ptid.visitno, dt.ggplot_2$ptid.visitno) # TRUE
+dt.ggplot <- merge(x = dt.ggplot_1, 
+                   y = dt.ggplot_2 %>%
+                     select(ptid.visitno, FS_2, PFS_2), 
+                   by = "ptid.visitno") %>%
+  select(ptid.visitno, PTID, VISITNO, VISITMONTH, FS_1, PFS_1, FS_2, PFS_2)
+dt.ggplot <- dt.ggplot %>%
+  group_by(ptid.visitno) %>%
+  mutate(filt = c("BA.4-5 S1", "BA.4-5 S2")[which.max(c(FS_1, FS_2))]) %>%
+  mutate(FS_final = c(FS_1, FS_2)[which.max(c(FS_1, FS_2))]) %>%
+  mutate(PFS_final = c(PFS_1, PFS_2)[which.max(c(FS_1, FS_2))])
+dt.ggplot$RX_CODE <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX_CODE)
+dt.ggplot$RX <- plyr::mapvalues(x = dt.ggplot$PTID, from = meta.data$subject, to = meta.data$RX)
+dt.ggplot$STIM <- "Spike BA4/5"
+```
+```{r eval=FALSE, echo=TRUE, message=FALSE, warnings=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt.ggplot %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" ~ "#33A02C",
+                              RX_CODE %in% "AG3" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG2-2" ~ "#33A02C",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                RX_CODE %in% "AG4-2" ~ "#FF7F00")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white"))
+dt.ggplot <- dt.ggplot %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+")))
+
+#- Fig.
+cairo_pdf(file = "Fig_3D.pdf", 
+    width = 15, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in "Spike BA4/5") {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(STIM == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", 
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(PTID) %>%
+    ggplot() +
+      geom_point(aes(x = X, y = FS_final, fill = FILL_PCH, group = PTID), 
+                 color = "white", 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = 3, alpha = 1, pch = 21) +
+      geom_line(aes(x = X, y = FS_final, color = COLOR_LINE, group = PTID), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = .2, alpha = .7) +
+      geom_boxplot(aes(x = X, y = FS_final, fill = FILL_BX),
+                   alpha = .5, width = .5, outlier.shape = NA) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV+, SARS-CoV-2+")) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV-, SARS-CoV-2+")) +
+      facet_grid(~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations",  
+                                  "Baseline_2", "Post one\nvaccination_2",
+                                  "Baseline_3", "Post two\nvaccinations_3"),
+                       labels = c("Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post one\nvaccination",
+                                  "Baseline", "Post two\nvaccinations")) +
+      scale_y_continuous(limits = c(0.005, 0.07), expand=expansion(add=0)) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#33A02C" = "#33A02C",
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "#FF7F00" = "#FF7F00")) +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#33A02C" = "#33A02C", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "#FF7F00" = "#FF7F00", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "Functionality score (CD8+ T)\nCOMPASS", 
+           fill = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 12),
+            axis.title = element_text(size = 14),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.position = "none") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+

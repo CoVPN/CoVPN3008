@@ -1,0 +1,2117 @@
+---
+title: "- ICS - CD4+ T - High-Dimensional ICS Analysis -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(cowplot)
+library(data.table)
+library(doMC)
+```
+
+# - Clustering
+______________
+
+Fluorescence intensity expression from CD4+ T expressing 1 of 8 cytokines or functional activation markers (IFN-$\gamma$, TNF, CD154, IL-2, IL-4, IL-5/IL-13, IL-17a and IL-21) were extracted; and Leiden clustering was performed.  
+
+The gate used is the following:  
+
+* CD4+ T - `/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+`  
+
+Duplicates, unreliable as well as out of window samples were removed.  
+
+**Immunogenicity Set**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Data - CD4+ T - Immunogenicity Set
+##-- meta.data
+#- Unreliable PTIDs
+unreliable.s <- readxl::read_xlsx(path = "./CoVPN-3008_Immunogenicity_Unreliable-data_18SEP23_VV.xlsx")
+unreliable.s <- unreliable.s[2:nrow(unreliable.s), ]
+unreliable.s %>%
+  filter(`Unreliable Stim` == "ALL") %>%
+  mutate(SAMPLE = paste(Batch, PTID, VISITNO, `Run Num`, sep = "_")) %>%
+  pull(SAMPLE) -> unreliable.s_1
+unreliable.s %>%
+  filter(`Unreliable Stim` == "negctrl") %>%
+  mutate(SAMPLE = paste(Batch, PTID, VISITNO, `Run Num`, Replicate, "negctrl", sep = "_")) %>%
+  pull(SAMPLE) -> unreliable.s_2
+unreliable.s %>%
+  filter(!(`Unreliable Stim` %in% c("ALL", "negctrl"))) %>%
+  mutate(SAMPLE = paste(Batch, PTID, VISITNO, `Run Num`, "1", `Unreliable Stim`, sep = "_")) %>%
+  pull(SAMPLE) -> unreliable.s_3
+#- Filtered PTIDs (Immunogenicity flags x3)
+meta.data <- read_csv(file = "./CoVPN-3008_ICS_group.csv")
+meta.data %>%
+  filter(immfl == "Y" & immincfl == "Y" & pprem6ifl == "Y") %>%
+  pull(subject) -> filtered.s
+#- Out of windows
+out.of.wind <- read_csv(file = "./CoVPN-3008_ICS_PT_filtered_sample_20231228.csv")
+out.of.wind %>%
+  filter(reason == "Out of window") %>%
+  mutate(sample = paste(ptid, visitno)) %>%
+  pull(sample) %>%
+  unique() -> filtered.s_2
+
+
+##-- Data (ICS)
+#- MTL
+dt.MTL <- readxl::read_xlsx(path = "./3008 Immunogenicity MTL_B.xlsx") %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO))
+colnames(dt.MTL)[1] <- "BATCH"
+colnames(dt.MTL)[10] <- "RUNNUM"
+#- dt
+list.raw <- readRDS(file = "./001_list-dt_CD4+T_1-of-8-cytokines(1)_immunogenicity.rds")
+lapply(X = list.raw, function(x) x$exprs) %>%
+  bind_rows() %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO)) -> dt.exprs.raw
+#- Filtering (rows)
+ICSR::do_filtering(dt = dt.exprs.raw,
+                   remove_dup = TRUE,
+                   dt.MTL_dup = dt.MTL,
+                   remove_participants = TRUE,
+                   participants_list = "CTAC0036",
+                   remove_nsub = FALSE,
+                   cutoff_nsub = NULL,
+                   flag_unreliable = TRUE,
+                   unreliable_list_all = unreliable.s_1,
+                   unreliable_list_by_stim = c(unreliable.s_2, unreliable.s_3)) -> dt.immunogenicity
+dt.immunogenicity <- dt.immunogenicity %>%
+  # filter(PTID %in% filtered.s) %>%
+  mutate(reliable_flag = case_when(paste(PTID, VISITNO) %in% filtered.s_2 ~ "0",
+                                   .default = reliable_flag))
+dt.immunogenicity$reliable_flag %>%
+  table() # 1,159,091 CD4+ T / 245 PTIDs (when filter(PTID %in% filtered.s) == it works!)
+dt.immunogenicity <- dt.immunogenicity %>%
+  filter(reliable_flag == "1") %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2")))
+#- Filtering (cols)
+cols <- c("FCS", "BATCH", "PTID", "STIM", "VISITNO", "VISITMONTH", "RUNNUM", "REPLICATE", "SAMP_ORD", "NSUB", "CYTNUM",
+          colnames(dt.immunogenicity)[str_detect(string = colnames(dt.immunogenicity), pattern = "Time")],
+          colnames(dt.immunogenicity)[str_detect(string = colnames(dt.immunogenicity), pattern = "asinh")])
+# UViD, CD14, CD19, CD3, CD56, CD16, CD8 & CD4 are removed (/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+)
+# CXCR5 is removed (unreliable marker)
+cols <- cols[-(c(33, 42, 44, 45, 49, 52, 54, 55, 57, 58, 69, 71, 72, 76, 79, 81, 82, 84, 85))]
+dt.immunogenicity <- dt.immunogenicity %>%
+  select(cols)
+
+
+##-- Data summary (ICS)
+#- dt
+lapply(X = list.raw, function(x) x$cytnum) %>%
+  bind_rows() %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO)) -> dt.cytnum.raw
+#- Filtering (rows)
+ICSR::do_filtering(dt = dt.cytnum.raw,
+                   remove_dup = TRUE,
+                   dt.MTL_dup = dt.MTL,
+                   remove_participants = TRUE,
+                   participants_list = "CTAC0036",
+                   remove_nsub = FALSE,
+                   cutoff_nsub = NULL,
+                   flag_unreliable = FALSE) -> dt.summary.immunogenicity
+dt.summary.immunogenicity <- dt.summary.immunogenicity %>%
+  filter(!(paste(BATCH, PTID, VISITNO, RUNNUM, sep = "_") %in% unreliable.s_1)) %>%
+  filter(!(paste(BATCH, PTID, VISITNO, RUNNUM, REPLICATE, STIM, sep = "_") %in% unreliable.s_2)) %>%
+  filter(!(paste(BATCH, PTID, VISITNO, RUNNUM, REPLICATE, STIM, sep = "_") %in% unreliable.s_3)) %>%
+  # filter((PTID %in% filtered.s)) %>%
+  filter(!(paste(PTID, VISITNO) %in% filtered.s_2)) %>%
+  filter(boolean_CYTNUM == TRUE) %>%
+  group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, SAMP_ORD) %>%
+  summarise(NSUB = sum(NSUB), CYTNUM = sum(CYTNUM)) %>%
+  ungroup() %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) # 245 PTIDs
+```   
+  
+**Case cohort Set**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Data - CD4+ T - Case cohort Set
+##-- meta.data
+#- Unreliable PTIDs
+unreliable.s <- readxl::read_xlsx(path = "./CoVPN 3008 Case Cohort_Unreliable data_16NOV23_A_modified_08FEB2024.xlsx")
+unreliable.s <- unreliable.s[2:nrow(unreliable.s), ]
+unreliable.s %>%
+  filter(`Unreliable Stim` == "ALL") %>%
+  mutate(SAMPLE = paste(`Batch #`, PTID, VISITNO, `Run Num`, sep = "_")) %>%
+  pull(SAMPLE) -> unreliable.s_1
+unreliable.s %>%
+  filter(!(`Unreliable Stim` %in% c("ALL", "negctrl"))) %>%
+  mutate(SAMPLE = paste(`Batch #`, PTID, VISITNO, `Run Num`, "1", `Unreliable Stim`, sep = "_")) %>%
+  pull(SAMPLE) -> unreliable.s_2
+
+
+##-- Data (ICS)
+#- MTL
+dt.MTL <- readxl::read_xlsx(path = "./CoVPN3008 Cases_MTL_A_14Sep23_VV.xlsx") %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "3.4" ~ "3", 
+                             VISITNO == "4.2" ~ "4", 
+                             VISITNO == "4.5999999999999996" ~ "4", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO))
+colnames(dt.MTL)[1] <- "BATCH"
+colnames(dt.MTL)[10] <- "RUNNUM"
+#- dt
+list.raw <- readRDS(file = "./001_list-dt_CD4+T_1-of-8-cytokines(1).rds")
+lapply(X = list.raw, function(x) x$exprs) %>%
+  bind_rows() %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "3.4" ~ "3", 
+                             VISITNO == "4.2" ~ "4", 
+                             VISITNO == "4.5999999999999996" ~ "4", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO)) -> dt.exprs.raw
+#- Filtering (rows)
+ICSR::do_filtering(dt = dt.exprs.raw,
+                   remove_dup = TRUE,
+                   dt.MTL_dup = dt.MTL,
+                   remove_participants = TRUE,
+                   participants_list = "CTAC0036",
+                   remove_nsub = FALSE,
+                   cutoff_nsub = NULL,
+                   flag_unreliable = TRUE,
+                   unreliable_list_all = unreliable.s_1,
+                   unreliable_list_by_stim = unreliable.s_2) -> dt.cc
+dt.cc$reliable_flag %>%
+  table() # 195,069 CD4+ T / 67 PTIDs
+dt.cc <- dt.cc %>%
+  filter(reliable_flag == "1") %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2")))
+#- Filtering (cols)
+cols <- c("FCS", "BATCH", "PTID", "STIM", "VISITNO", "VISITMONTH", "RUNNUM", "REPLICATE", "SAMP_ORD", "NSUB", "CYTNUM",
+          colnames(dt.cc)[str_detect(string = colnames(dt.cc), pattern = "Time")],
+          colnames(dt.cc)[str_detect(string = colnames(dt.cc), pattern = "asinh")])
+# UViD, CD14, CD19, CD3, CD56, CD16, CD8 & CD4 are removed (/Time/K1/K2/K3/K4/K5/K6/K7/K8/Lv/14-/L/S/19-/3+/3+excl 16br/56-16-/4+)
+# CXCR5 is removed (unreliable marker)
+cols <- cols[-(c(33, 42, 44, 45, 49, 52, 54, 55, 57, 58, 69, 71, 72, 76, 79, 81, 82, 84, 85))]
+dt.cc <- dt.cc %>%
+  select(cols)
+
+##-- Data summary (ICS)
+#- dt
+lapply(X = list.raw, function(x) x$cytnum) %>%
+  bind_rows() %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "3.4" ~ "3", 
+                             VISITNO == "4.2" ~ "4", 
+                             VISITNO == "4.5999999999999996" ~ "4", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO)) -> dt.cytnum.raw
+#- Filtering (rows)
+ICSR::do_filtering(dt = dt.cytnum.raw,
+                   remove_dup = TRUE,
+                   dt.MTL_dup = dt.MTL,
+                   remove_participants = TRUE,
+                   participants_list = "CTAC0036",
+                   remove_nsub = FALSE,
+                   cutoff_nsub = NULL,
+                   flag_unreliable = TRUE,
+                   unreliable_list_all = unreliable.s_1,
+                   unreliable_list_by_stim = unreliable.s_2) -> dt.summary.cc
+dt.summary.cc$reliable_flag %>%
+  table() # 67 PTIDs
+dt.summary.cc <- dt.summary.cc %>%
+  filter(reliable_flag == "1") %>%
+  filter(boolean_CYTNUM == TRUE) %>%
+  filter(!is.na(PTID)) %>%
+  group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, SAMP_ORD) %>%
+  summarise(NSUB = sum(NSUB), CYTNUM = sum(CYTNUM)) %>%
+  ungroup() %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) # 245 PTIDs
+```   
+
+**Merging - Immunogenicity x Case Cohort**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Merging
+#- Merge
+identical(colnames(dt.immunogenicity), colnames(dt.cc)) # TRUE
+dt <- bind_rows(dt.immunogenicity %>%
+                  mutate(SET = "Immunogenicity set"),
+                dt.cc %>%
+                  mutate(SET = "Case cohort set"))
+identical(colnames(dt.summary.immunogenicity), colnames(dt.summary.cc)) # TRUE
+dt.summary_Rhino <- bind_rows(dt.summary.immunogenicity %>%
+                                mutate(SET = "Immunogenicity set"),
+                              dt.summary.cc %>%
+                                mutate(SET = "Case cohort set"))
+intersect(unique(dt.immunogenicity$PTID), unique(dt.cc$PTID))
+
+#- Characteristics
+dt.nonfilt <- dt
+dt.nonfilt <- dt.nonfilt %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2, 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))
+table(dt.nonfilt$RX_CODE, dt.nonfilt$COHORT, useNA = "always")
+dt.nonfilt %>%
+  filter(SET == "Case cohort set") %>%
+  filter(!duplicated(PTID)) %>%
+  pull(COHORT) %>%
+  table() # 2 non-cases; 65 cases
+dt.nonfilt %>%
+  filter(SET == "Case cohort set") %>%
+  filter(!duplicated(PTID)) %>%
+  pull(PTID) %>%
+  unique() %>%
+  length() # 67
+dt.nonfilt %>%
+  filter(SET != "Case cohort set") %>%
+  filter(!duplicated(PTID)) %>%
+  pull(COHORT) %>%
+  table() # 264 non-cases; 5 cases
+dt.nonfilt %>%
+  filter(SET != "Case cohort set") %>%
+  filter(!duplicated(PTID)) %>%
+  pull(PTID) %>%
+  unique() %>%
+  length() # 278
+
+#- Characteristics - check wth MTL
+dt.MTL.imm <- readxl::read_xlsx(path = "./3008 Immunogenicity MTL_B.xlsx") %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2, 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))
+dt.MTL.imm %>%
+  filter(!duplicated(PTID)) %>%
+  pull(COHORT) %>%
+  table() # 286 non-cases; 6 cases
+length(unique(dt.MTL.imm$PTID)) # 302
+dt.MTL.cc <- readxl::read_xlsx(path = "./CoVPN3008 Cases_MTL_A_14Sep23_VV.xlsx") %>% 
+  mutate(VISITNO = case_when(VISITNO == "3.1" ~ "3", 
+                             VISITNO == "10.1" ~ "10", 
+                             .default = VISITNO)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2, 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))
+dt.MTL.cc %>%
+  filter(!duplicated(PTID)) %>%
+  pull(COHORT) %>%
+  table() # 87 cases; 2 non-cases
+length(unique(dt.MTL.cc$PTID)) # 90
+
+#- Case-cohort info
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+  filter(FASFL == "Y") # 168 PTIDs
+table(meta.data$Perprotocol)
+table(meta.data$AGRP2, meta.data$EventIndPrimary1)
+# 1: 22 x 7 (VIPP HIV+) - Total 29
+# 2.1: 39 x 22 (HIPP HIV+) - Total 61
+# 3: 21 x 0 (VIPP HIV-) - Total 21
+# 4.1: 56 x 1 (HIPP HIV-) - Total 57
+meta.data %>%
+  pull(Subjectid) -> PTIDs
+PTIDs <- str_remove(string = PTIDs, pattern = "C3008[-]") # 168 participants
+intersect(unique(dt$PTID), PTIDs) %>% length() # 168 participants
+
+#- Venn diagram
+x <- list("Immunogenicity set" = dt %>% filter(SET == "Immunogenicity set") %>% pull(PTID) %>% unique(), 
+          "Case-cohort set" = PTIDs)
+ggvenn::ggvenn(
+  x, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF"),
+  stroke_size = 0.5, set_name_size = 4
+  ) # pdf 5 x 6
+
+#- Filtering
+dt <- dt %>%
+  filter(PTID %in% PTIDs)
+length(unique(dt$PTID)) # 168 participants
+dt.summary_Rhino <- dt.summary_Rhino %>%
+  filter(PTID %in% PTIDs)
+length(unique(dt.summary_Rhino$PTID)) # 168 participants
+
+#- Check (n's)
+dt %>%
+  filter(!duplicated(PTID)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2, 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE)) -> dt.check
+table(dt.check$SET, dt.check$COHORT, dt.check$RX_CODE) # flowchart - ok!
+dt %>%
+  filter(!duplicated(paste(PTID, VISITNO, STIM))) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2, 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE)) -> dt.check
+table(dt.check$VISITNO, dt.check$STIM, dt.check$RX_CODE) # flowchart - ok!
+
+#- Check (unreliables)
+# Immunogenicity
+dt %>%
+  filter(paste(BATCH, PTID, VISITNO, RUNNUM, sep = "_") %in% unreliable.s_1)
+dt %>%
+  filter(paste(BATCH, PTID, VISITNO, RUNNUM, REPLICATE, STIM, sep = "_") %in% unreliable.s_2)
+dt %>%
+  filter(paste(BATCH, PTID, VISITNO, RUNNUM, REPLICATE, STIM, sep = "_") %in% unreliable.s_3)
+# Case-cohort
+dt %>%
+  filter(paste(BATCH, PTID, VISITNO, RUNNUM, sep = "_") %in% unreliable.s_1)
+dt %>%
+  filter(paste(BATCH, PTID, VISITNO, RUNNUM, REPLICATE, STIM, sep = "_") %in% unreliable.s_2)
+
+#- Output
+gdata::keep(dt, dt.summary_Rhino, sure = TRUE)
+```
+
+**Leiden - k = 30 - asinh+asym**
+
+Leiden clustering was made on the cluster.
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Leiden
+#- k = 30 & resolution = 0.8 (asinh+asym)
+partition <- readRDS(file = "./leiden-partition_k=30_niter=100_res=0.8_asinh+asym.rds")
+dt$asinh_asym_Leiden <- partition
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Silhouette
+#- Data
+dt.ggplot <- readRDS(file = "./dt_silhouette_k=30_niter=100.rds")[[8]]
+
+#- Fig.
+my.colors <- scales::hue_pal()(16)
+names(my.colors) <- paste("Leiden:", 1:16)
+dt.ggplot %>%
+  mutate(Leiden = factor(x = cluster, levels = paste("Leiden:", 1:16))) %>%
+  arrange(Leiden, width) %>%
+  mutate(cell.id = 1:nrow(dt.ggplot)) %>%
+  ggplot() +
+    geom_bar(aes(x = cell.id, weight = width, fill = Leiden)) +
+    scale_fill_manual(values = my.colors) +
+    labs(x = NULL, y = "Silhouette width", fill = NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(),
+          panel.grid = element_blank(),
+          legend.position = "bottom") -> plot
+plot
+# Silhouette: allowing us to quickly identify poorly separate clusters with mostly negative widths (such as 12)
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Purity
+#- Data
+dt.ggplot <- readRDS(file = "./dt_purity_k=30_niter=100.rds")[[8]]
+
+#- Fig.
+my.colors <- scales::hue_pal()(16)
+names(my.colors) <- paste("Leiden:", 1:16)
+dt.ggplot %>%
+  mutate(Leiden = factor(x = cluster, levels = paste("Leiden:", 1:16))) %>%
+  arrange(Leiden, purity) %>%
+  mutate(cell.id = 1:nrow(dt.ggplot)) %>%
+  ggplot() +
+    geom_bar(aes(x = cell.id, weight = purity, fill = Leiden)) +
+    geom_hline(yintercept = 0.9, color = "grey50", lty = 2, lwd = .25) +
+    scale_fill_manual(values = my.colors) +
+    labs(x = NULL, y = "Purity", fill = NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_blank(), 
+          axis.ticks.x = element_blank(),
+          panel.grid = element_blank(),
+          legend.position = "bottom") -> plot
+plot
+# Median purity values are consistently greater than 0.9, indicating that most cells in each cluster are primarily surrounded by other cells from the same cluster. Some clusters have low purity values that may warrant more careful inspection - these probably represent closely related subpopulations.
+```
+
+**UMAP - asinh+asym**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+#- UMAP (asinh+asym)
+markers <- colnames(dt)[str_detect(string = colnames(dt), pattern = "asinh_asym")]
+set.seed(1234)
+umap <- uwot::umap(X = dt[, ..markers], n_neighbors = 10, n_components = 2, min_dist = .1, verbose = TRUE)
+dt$asinh_asym_UMAP_1 <- umap[, 1] %>% as.numeric()
+dt$asinh_asym_UMAP_2 <- umap[, 2] %>% as.numeric()
+```
+
+**`colnames()`**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- data.table()
+#- Ordering
+cols.tmp <- colnames(dt)[str_detect(string = colnames(dt), pattern = "asinh")]
+cols.tmp <- cols.tmp[!str_detect(string = cols.tmp, pattern = "UMAP|Leiden")]
+cols <- c("FCS", "SET", "BATCH", "PTID", "STIM", "VISITNO", "VISITMONTH", "RUNNUM", "REPLICATE", "SAMP_ORD", "NSUB", "CYTNUM", 
+          "asinh_asym_UMAP_1", "asinh_asym_UMAP_2", "asinh_asym_Leiden",
+          colnames(dt)[str_detect(string = colnames(dt), pattern = "Time")],
+          cols.tmp)
+dt <- dt[, ..cols]
+```
+
+
+## - asinh+asym
+_______________
+
+### - UMAP
+__________
+
+**UMAP - BATCH**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+dt %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    # ggpointdensity::geom_pointdensity(size = .1, method = "kde2d") +
+    geom_density_2d_filled() +
+    geom_density_2d(colour = "black", linewidth = .1) +
+    facet_wrap(~ paste("BATCH:", BATCH), ncol = 6) +
+    scale_fill_viridis_d(option = "B") + # scale_fill_viridis_d(option = "E")
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          strip.text = element_text(size = 16),
+          panel.grid = element_blank(),
+          legend.position = "none") -> plot
+png("UMAP-by-BATCH.png", width = 14, height = 15, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - PTID**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+dt %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_density_2d_filled() +
+    geom_density_2d(colour = "black", linewidth = .1) +
+    facet_wrap(~ paste("PTID:", PTID), ncol = 15) +
+    scale_fill_viridis_d(option = "B") + 
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          strip.text = element_text(size = 16),
+          panel.grid = element_blank(),
+          legend.position = "none") -> plot
+png("UMAP-by-PTID.png", width = 35, height = 32, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - GROUP**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+   filter(FASFL == "Y") # 168 PTIDs
+dt %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2.1", "AG3", "AG4.1"), 
+                                   warn_missing = FALSE)) %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_density_2d_filled() +
+    geom_density_2d(colour = "black", linewidth = .1) +
+    facet_wrap(~ RX_CODE, ncol = 4) +
+    scale_fill_viridis_d(option = "B") + 
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          strip.text = element_text(size = 16),
+          panel.grid = element_blank(),
+          legend.position = "none") -> plot
+png("UMAP-by-GROUP.png", width = 15, height = 4.5, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - COHORT**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+   filter(FASFL == "Y") # 168 PTIDs
+dt %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE)) %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_density_2d_filled() +
+    geom_density_2d(colour = "black", linewidth = .1) +
+    facet_wrap(~ COHORT, ncol = 4) +
+    scale_fill_viridis_d(option = "B") + 
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          strip.text = element_text(size = 16),
+          panel.grid = element_blank(),
+          legend.position = "none") -> plot
+png("UMAP-by-COHORT.png", width = 7.5, height = 4.5, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - VISITMONTH**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+dt %>%
+  mutate(VISITMONTH = factor(x = VISITMONTH, levels = c("M0", "M1", "M2"))) %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_density_2d_filled() +
+    geom_density_2d(colour = "black", linewidth = .1) +
+    facet_wrap(~ VISITMONTH, ncol = 3) +
+    scale_fill_viridis_d(option = "B") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 16),
+          legend.position = "none") -> plot
+png("UMAP-by-VISITMONTH.png", width = 9, height = 3.4, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - ANTIGEN**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+dt %>%
+  mutate(STIM = factor(x = STIM, levels = c("BA.1-2-4-5 E / BA.1-2-4-5 M", "BA.4-5 N", "BA.4-5 S1", "BA.4-5 S2", "COV2 CON S1", "COV2 CON S2", "Wuhan E Wuhan M", "Wuhan N", "negctrl"))) %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_density_2d_filled() +
+    geom_density_2d(colour = "black", linewidth = .1) +
+    facet_wrap(~ STIM, ncol = 3) +
+    scale_fill_viridis_d(option = "B") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 16),
+          legend.position = "none") -> plot
+png("UMAP-by-ANTIGEN.png", width = 9, height = 9, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - CYTNUM**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+dt %>%
+  arrange(CYTNUM) %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_point(aes(color = CYTNUM %>% as.character()), size = .1) +
+    scale_color_manual(values = colorRamps::matlab.like2(n = 8)) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = "CYTNUM") +
+    guides(colour = guide_legend(override.aes = list(size = 4, alpha = 1))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 16),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 16),
+          legend.text = element_text(size = 14),
+          legend.position = "bottom") -> plot
+png("UMAP-by-CYTNUM.png", width = 4.25, height = 5, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off()
+```
+
+**UMAP - Marker gates**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+#- Data
+cols <- c("asinh_asym_UMAP_1", "asinh_asym_UMAP_2", colnames(dt)[str_detect(string = colnames(dt), pattern = "Time")])
+dt.ggplot <- dt[, ..cols] %>%
+  reshape::melt(id.vars = c("asinh_asym_UMAP_1", "asinh_asym_UMAP_2")) %>%
+  mutate(variable = factor(x = variable, levels = c(colnames(dt)[str_detect(string = colnames(dt), pattern = "Time")])))
+
+#- Figures
+dt.ggplot %>%
+  filter(value == TRUE) %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_point(size = .1, alpha = .2, color = "grey70", data = dt.ggplot %>% filter(value == FALSE)) +
+    ggpointdensity::geom_pointdensity(size = .1, method = "kde2d") +
+    facet_wrap(~ variable, ncol = 5) +
+    viridis::scale_color_viridis() +
+    labs(x = "UMAP-1", y = "UMAP-2") +
+    theme_bw() +
+    theme(legend.position = "none", 
+          axis.text = element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.title = element_text(size = 16), 
+          panel.grid = element_blank(), 
+          strip.text = element_text(size = 6)) -> plot
+png("UMAP-by-marker-gates.png", width = 20, height = 20, units = "in", pointsize = 12, res = 300)
+print(plot)
+dev.off() 
+```
+
+**UMAP - Markers**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+markers <- colnames(dt)[str_detect(string = colnames(dt), pattern = "asinh_asym")]
+markers <- markers[!str_detect(string = markers, pattern = "cyCombine")]
+markers <- markers[-c(1:3)]
+for(j in markers){
+  # data.table()
+  dt.ggplot <- dt[, c("asinh_asym_UMAP_1", "asinh_asym_UMAP_2", ..j)]
+  colnames(dt.ggplot)[3] <- "value"
+  dt.ggplot$marker <- plyr::mapvalues(x = j, 
+                                      from = markers, 
+                                      to = c("Perforin", "IL-5 or IL-13", "Ki67", "IL-4", "IL-2", "Granzyme B", "IFN-\u03B3", "CCR7", "CD25", "PD-1", "CCR6", "TNF", "CD45RA", "CD154", "IL-21", "CXCR3", "FoxP3", "IL-17a"),
+                                      warn_missing = FALSE)
+  
+  # Figure
+  dt.ggplot %>%
+    ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+      geom_point(aes(color = value), size = .1) +
+      facet_wrap(~ marker) +
+      viridis::scale_color_viridis(option = "D", limits = c(-1, 7.5)) +
+      labs(x = "UMAP-1", y = "UMAP-2", color = "arcsinh(x/500) value") +
+      theme_bw() +
+      theme(legend.position = "bottom", 
+            axis.text = element_blank(), 
+            axis.ticks = element_blank(), 
+            axis.title = element_text(size = 16), 
+            panel.grid = element_blank(), 
+            strip.text = element_text(size = 16)) -> plot
+  
+  # Output
+  png(paste0("UMAP-by-markers_", 
+                  str_replace(string = str_remove_all(string = j, pattern = "asinh_asym_"), pattern = "[/]", replacement = "-or-"), 
+                  ".png"),
+      width = 6, height = 6.5, units = "in", pointsize = 12, res = 300)
+  print(plot)
+  dev.off()
+}
+```
+
+**UMAP - `Leiden`**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+my.colors <- scales::hue_pal()(16)
+names(my.colors) <- paste("Leiden:", 1:16)
+
+dt %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_point(aes(color = asinh_asym_Leiden), size = .1) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = NULL) +
+    scale_color_manual(values = my.colors) +
+    guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "bottom") -> plot
+png(filename = "UMAP-by-LEIDEN(1).png", 
+    width = 6, height = 7.5, units = "in", pointsize = 12, res = 300)
+plot
+dev.off()
+
+dt %>%
+  ggplot(aes(x = asinh_asym_UMAP_1, y = asinh_asym_UMAP_2)) +
+    geom_point(aes(color = asinh_asym_Leiden), size = .1) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = NULL) +
+    scale_color_manual(values = my.colors) +
+    facet_wrap(~ asinh_asym_Leiden) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          strip.text = element_text(size = 16),
+          legend.text = element_text(size = 12),
+          legend.position = "none") -> plot
+png(filename = "UMAP-by-LEIDEN(2).png", 
+    width = 16, height = 16.5, units = "in", pointsize = 12, res = 300)
+plot
+dev.off()
+```
+
+### - Annotation
+________________
+
+**Dot-plot**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Dot-plot
+##-- Data (dt.tmp)
+from <- colnames(dt)[str_detect(string = colnames(dt), pattern = "Time")][-1]
+to <- c("CCR7+", "CD45RA+", "Naive+", "CM+", "EM+", "TEMRA+",  "IFN-\u03B3+", "IL-2+", "IL-4+", "IL-5_IL-13+", "IL-17a+", "IL-21+", "CD154+", "TNF+", "Granzyme B+", "Perforin+", "CD25+", "PD-1+", "CCR6+", "CXCR3+", "Ki67+", "FoxP3+")
+dt.tmp <- dt
+colnames(dt.tmp)[str_detect(string = colnames(dt.tmp), pattern = "Time")][-1] <- to
+
+
+##-- dt.ggplot (boolean)
+dt.ggplot.boolean <- ICSR::dt.ggplot_boolean(dt = dt.tmp, flowjo_gates = to, cluster_col = "asinh_asym_Leiden")
+dt.ggplot.boolean %>% View()
+
+
+##-- Dendrogram
+library(ggdendro)
+set.seed(1234)
+#- Data & dendrogram
+correlation <- dt.ggplot.boolean %>%
+  select(cluster, variable, marker_positivity) %>%
+  reshape2::acast(cluster ~ variable, value.var = "marker_positivity") %>%
+  t() %>%
+  cor()
+hclust.res <- hclust(as.dist(1 - correlation)) 
+plot(as.dendrogram(hclust.res)) # c(11, 3, 8, 1, 4, 7, 2, 5, 16, 9, 13, 15, 10, 12, 6, 14)
+
+#- Fig.
+ddata <- dendro_data(hclust.res, type = "rectangle")
+plot.dendrogram <- ggplot(segment(ddata)) + 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  scale_x_continuous(expand = c(0, .6)) + 
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.border = element_blank())
+
+
+##-- Barplot
+plot.barplot <- dt %>%
+  group_by(asinh_asym_Leiden, .drop = FALSE) %>%
+  summarize(n = n()) 
+plot.barplot <- plot.barplot %>%
+  mutate(Leiden = factor(x = asinh_asym_Leiden, 
+                         levels = paste("Leiden:", c(11, 3, 8, 1, 4, 7, 2, 5, 16, 9, 13, 15, 10, 12, 6, 14)))) %>%
+  ggplot(aes(x = Leiden, y = n, fill = Leiden)) +
+    geom_bar(stat = "identity") +
+    scale_y_continuous(trans = "sqrt") +
+    scale_fill_manual(values = my.colors) +
+    labs(y = "n()") +
+    theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 18),
+          axis.ticks.x = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(size = 20),
+          panel.grid = element_blank(),
+          legend.position = "none")
+
+
+##-- Boxplot
+# Proportion of clusters within each BATCH (ex: in BATCH #1, Leiden 1 + 2 + 3 .. = 1)
+dt.ggplot <- dt %>%
+  group_by(BATCH) %>%
+  mutate(n.total = n()) %>%
+  group_by(BATCH, asinh_asym_Leiden, n.total, .drop = FALSE) %>%
+  summarise(n = n()) %>%
+  mutate(Freq = n / n.total)
+# Adjusted proportion of BATCH within each cluster (ex: In Leiden 1, BATCH #1 + #2 + .. = 1) 
+dt.ggplot <- dt.ggplot %>%
+  group_by(asinh_asym_Leiden) %>%
+  mutate(sum.Freq.PhenoGraph = sum(Freq, na.rm = TRUE)) %>%
+  mutate(Freq_2 = Freq / sum.Freq.PhenoGraph) %>%
+  mutate(Leiden = factor(x = asinh_asym_Leiden, 
+                         levels = paste("Leiden:", c(11, 3, 8, 1, 4, 7, 2, 5, 16, 9, 13, 15, 10, 12, 6, 14)))) %>%
+  arrange(BATCH, Leiden)
+plot.boxplot <- dt.ggplot %>%
+  ggplot(aes(x = Leiden, y = Freq_2)) +
+    geom_boxplot(aes(fill = Leiden), outlier.shape = NA, alpha = .5) +
+    geom_line(aes(group = BATCH), position = position_jitter(seed = 4, width = .2), color = "grey70", alpha = .5) +
+    geom_point(aes(group = BATCH, fill = Leiden), 
+               position = position_jitter(seed = 4, width = .2), 
+               color = "grey60", size = 5, alpha = .8, pch = 21) +
+    scale_fill_manual(values = my.colors) +
+    scale_y_continuous(limits = c(0, 1), breaks = c(0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1)) +
+    labs(x = NULL, y = "Adjusted proportion of BATCH") +
+    theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.text.y = element_text(size = 18),
+          axis.title = element_text(size = 20),
+          panel.grid = element_blank(),
+          legend.position = "none")
+
+
+##-- Dotplot
+#- flowjo_gates
+flowjo_gates <- to
+
+#- Markers 
+from <- colnames(dt.tmp)[str_detect(string = colnames(dt.tmp), pattern = "asinh_asym")]
+from <- from[!str_detect(string = from, pattern = "cyCombine")]
+from <- from[-c(1:3)]
+to <- c("asinh_asym_Perforin", "asinh_asym_IL-5_IL-13", "asinh_asym_Ki67", "asinh_asym_IL-4", "asinh_asym_IL-2", "asinh_asym_Granzyme B", "asinh_asym_IFN-\u03B3", "asinh_asym_CCR7", "asinh_asym_CD25", "asinh_asym_PD-1", "asinh_asym_CCR6", "asinh_asym_TNF", "asinh_asym_CD45RA", "asinh_asym_CD154", "asinh_asym_IL-21", "asinh_asym_CXCR3", "asinh_asym_FoxP3", "asinh_asym_IL-17a")
+colnames(dt.tmp)[colnames(dt.tmp) %in% from] <- to
+
+#- colnames subset & rename
+cols <- c("asinh_asym_Leiden", 
+          colnames(dt.tmp)[str_detect(string = colnames(dt.tmp), pattern = "[+]")][-1],
+          to)
+dt.tmp <- dt.tmp[, ..cols]
+colnames(dt.tmp) <- str_remove(string = colnames(dt.tmp), pattern = "asinh_asym_")
+markers <- colnames(dt.tmp)[24:41]
+
+#- Dotplot
+order_level_marker <- c("Naive", "CM", "EM", "TEMRA", "CCR7", "CD45RA", "IFN-γ", "IL-2", "IL-4", "IL-5_IL-13", "IL-17a", "IL-21", "CD154", "TNF", "Granzyme B", "Perforin", "CD25", "PD-1", "CCR6", "CXCR3", "Ki67", "FoxP3")
+plot.dotplot <- ICSR::dotplot_annotation(
+  dt = dt.tmp,
+  markers = markers,
+  flowjo_gates = flowjo_gates,
+  cluster_col = "Leiden",
+  level_marker = order_level_marker,
+  order = paste("Leiden:", c(11, 3, 8, 1, 4, 7, 2, 5, 16, 9, 13, 15, 10, 12, 6, 14)))
+
+#- annotation
+annotation <- ICSR::x_axis(dt.boolean = dt.ggplot.boolean, 
+                           order = paste("Leiden:", c(11, 3, 8, 1, 4, 7, 2, 5, 16, 9, 13, 15, 10, 12, 6, 14)))
+annotation <- str_remove(string = annotation, pattern = "\nNA")
+
+#- Output (.pdf) (1)
+cairo_pdf(file = "dotplot-by-LEIDEN(1).pdf", width = 20, height = 25)
+plot <- plot_grid(plot.dendrogram, 
+                  plot.barplot, 
+                  plot.dotplot + scale_x_discrete(labels = annotation),
+                  align = "v", 
+                  axis = "l",
+                  ncol = 1, 
+                  rel_heights = c(1, 1.5, 6))
+print(plot)
+dev.off()
+
+#- Output (.pdf) (2)
+cairo_pdf(file = "dotplot-by-LEIDEN(2).pdf", width = 20, height = 25)
+plot <- plot_grid(plot.dendrogram, 
+                  plot.boxplot, 
+                  plot.dotplot + scale_x_discrete(labels = annotation),
+                  align = "v", 
+                  axis = "l",
+                  ncol = 1, 
+                  rel_heights = c(1, 1.5, 6))
+print(plot)
+dev.off()
+```
+
+**Ridge plot**
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Ridge plots
+markers <- colnames(dt)[str_detect(string = colnames(dt), pattern = "asinh_asym")]
+markers <- markers[!str_detect(string = markers, pattern = "cyCombine")]
+markers <- markers[-c(1:3)]
+cairo_pdf("ridge-plot-by-LEIDEN.pdf", width = 5, height = 10, onefile = TRUE)
+for(marker in markers){
+  # data.table()
+  dt.ggplot <- dt[, ..marker] %>%
+    mutate(marker = plyr::mapvalues(x = marker, 
+                                    from = markers, 
+                                    to = c("Perforin", "IL-5/IL-13", "Ki67", "IL-4", "IL-2", "GzB", "IFN-\u03B3", "CCR7", "CD25", "PD-1", "CCR6", "TNF", "CD45RA", "CD154", "IL-21", "CXCR3", "FOXP3", "IL-17A")))
+  colnames(dt.ggplot)[1] <- "value"
+  dt.ggplot$Leiden <- dt$asinh_asym_Leiden
+  
+  # Figure
+  dt.ggplot %>%
+    ggplot(aes(x = value, y = Leiden, fill = Leiden)) +
+      ggridges::geom_density_ridges(bandwidth = .1, size = .2) +
+      geom_vline(xintercept = 0, alpha = .5) +
+      scale_x_continuous(limits = c(-1, 7.5)) +
+      scale_fill_manual(values = my.colors) +
+      facet_wrap(~ marker) +
+      theme_bw() +
+      labs(x = NULL, y = NULL) +
+      theme(legend.position = "none", 
+            axis.title = element_text(size = 16), 
+            panel.grid = element_blank(), 
+            strip.text = element_text(size = 16)) -> plot
+  print(plot)
+}
+dev.off()
+```
+
+### - Positivity calls (`MIMOSA`)
+_________________________________
+
+For each cluster, STIM and VISITNO, a `MIMOSA` test (Finak et al., 2013) is applied to test whether the number of cytokine-producing cells for the stimulated data is equal to or greater than that for the negative control data. For each STIM, multiplicity adjustment is made.  
+NB: We are blinded for the `RX_CODE`.  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Data
+#- Pre-processing
+# Replicates are pooled together
+dt.summary <- dt %>% 
+  group_by(BATCH, PTID, STIM, VISITNO, RUNNUM, NSUB) %>%
+  summarize(CYTNUM = n()) %>%
+  group_by(BATCH, PTID, STIM, VISITNO, RUNNUM) %>%
+  summarise(NSUB = sum(NSUB), CYTNUM = sum(CYTNUM)) %>%
+  ungroup()
+
+#- Samples without cytnum
+setdiff(paste(dt.summary_Rhino$PTID, dt.summary_Rhino$STIM, dt.summary_Rhino$VISITNO),
+        paste(dt.summary$PTID, dt.summary$STIM, dt.summary$VISITNO)) 
+
+#- Pre-processing by Leiden
+dt.tmp <- dt %>%
+  group_by(BATCH, PTID, STIM, VISITNO, asinh_asym_Leiden, .drop = FALSE) %>%
+  summarize(CYTNUM = n()) 
+dt.tmp <- dt.tmp %>%
+  mutate(NSUB = plyr::mapvalues(x = paste(BATCH, PTID, STIM, VISITNO), 
+                                from = paste(dt.summary$BATCH, 
+                                             dt.summary$PTID, 
+                                             dt.summary$STIM, 
+                                             dt.summary$VISITNO), 
+                                to = dt.summary$NSUB,
+                                warn_missing = FALSE)) %>%
+  mutate(NSUB = NSUB %>% as.numeric()) %>%
+  ungroup() %>%
+  mutate(SAMPLE = paste(PTID, VISITNO, asinh_asym_Leiden)) %>%
+  select(BATCH, PTID, STIM, VISITNO, SAMPLE, asinh_asym_Leiden, NSUB, CYTNUM)
+
+#- Background subtraction
+dt.tmp_1 <- dt.tmp %>%
+  filter(STIM == "negctrl") %>%
+  rename(NSUB_NEG = "NSUB", CYTNUM_NEG = "CYTNUM") %>%
+  select(SAMPLE, NSUB_NEG, CYTNUM_NEG) 
+dt.tmp_2 <- dt.tmp %>%
+  filter(STIM != "negctrl")
+dt.Leiden <- merge(x = dt.tmp_2, y = dt.tmp_1, by = "SAMPLE", all.x = TRUE) %>%
+  mutate(PCTPOS = (CYTNUM / NSUB) * 100) %>%
+  mutate(PCTNEG = (CYTNUM_NEG / NSUB_NEG) * 100) %>%
+  mutate(PCTPOS_ADJ = PCTPOS - PCTNEG) %>%
+  select(BATCH, PTID, STIM, VISITNO, asinh_asym_Leiden, NSUB, CYTNUM, PCTPOS, NSUB_NEG, CYTNUM_NEG, PCTNEG, PCTPOS_ADJ) %>%
+  arrange(BATCH, PTID, STIM, VISITNO)
+colnames(dt.Leiden)[5] <- "Leiden"
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Positivity calls
+#- Data
+mimosaSet <- dt.Leiden %>%
+  mutate(SAMPLE = paste(PTID, VISITNO)) %>%
+  select(PTID, STIM, VISITNO, SAMPLE, Leiden, NSUB, CYTNUM, NSUB_NEG, CYTNUM_NEG)
+names(mimosaSet) <- toupper(names(mimosaSet))
+write.table(x = mimosaSet, file = "in-mimosaSet.csv", row.names = FALSE, sep = ",")
+
+#- Run MIMOSA
+library(MIMOSA)
+inFileName <- "in-mimosaSet.csv"
+outFileName <- "out-mimosaSet.csv"
+ICSR::runMIMOSA(INFILE = inFileName, OUTFILE = outFileName, CLUSTERS = paste("Leiden:", 1:16))
+
+#- Processing
+# For each STIM, multiplicity adjustment is made. == Adjustment is made by STIM.
+dt.results_MIMOSA <- read_csv(file = "out-mimosaSet.csv")
+
+#- Add positivity results
+dt.Leiden <- dt.Leiden %>%
+  mutate(MIMOSA_pr_nonresp = plyr::mapvalues(x = paste(PTID, VISITNO, STIM, Leiden), 
+                                      from = paste(dt.results_MIMOSA$ptid, 
+                                                   dt.results_MIMOSA$visitno, 
+                                                   dt.results_MIMOSA$stim,
+                                                   dt.results_MIMOSA$leiden),
+                                      to = dt.results_MIMOSA$pr_nonresp, 
+                                      warn_missing = FALSE)) %>%
+  mutate(MIMOSA_pr_nonresp = MIMOSA_pr_nonresp %>% as.numeric()) %>%
+  mutate(MIMOSA_pr_resp = plyr::mapvalues(x = paste(PTID, VISITNO, STIM, Leiden), 
+                                      from = paste(dt.results_MIMOSA$ptid, 
+                                                   dt.results_MIMOSA$visitno, 
+                                                   dt.results_MIMOSA$stim,
+                                                   dt.results_MIMOSA$leiden),
+                                      to = dt.results_MIMOSA$pr_resp, 
+                                      warn_missing = FALSE)) %>%
+  mutate(MIMOSA_pr_resp = MIMOSA_pr_resp %>% as.numeric()) %>%
+  mutate(MIMOSA_FDR = plyr::mapvalues(x = paste(PTID, VISITNO, STIM, Leiden), 
+                                      from = paste(dt.results_MIMOSA$ptid, 
+                                                   dt.results_MIMOSA$visitno, 
+                                                   dt.results_MIMOSA$stim,
+                                                   dt.results_MIMOSA$leiden),
+                                      to = dt.results_MIMOSA$fdr, 
+                                      warn_missing = FALSE)) %>%
+  mutate(MIMOSA_FDR = MIMOSA_FDR %>% as.numeric()) %>%
+  mutate(MIMOSA_call = ifelse(MIMOSA_pr_resp > 0.999, TRUE, FALSE))
+dt.Leiden$MIMOSA_call %>% table(useNA = "always")
+# dt.Leiden <- dt.Leiden %>%
+#   mutate(MIMOSA_FDR = case_when(is.na(MIMOSA_call) == TRUE ~ NA, .default = MIMOSA_FDR))
+```
+
+### - Positivity calls (`fisher.test`)
+______________________________________
+
+For each cluster, STIM and VISITNO, a Fisher's exact test is applied to test whether the number of cytokine-producing cells for the stimulated data is equal to or greater than that for the negative control data. For each combination of PTID, VISITNO and LEIDEN, multiplicity adjustment is made over the number of ANTIGEN.  
+NB: We are blinded for the `RX_CODE`.  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Positivity calls (Fisher's exact test)
+#- Data
+dt.results_Fisher <- dt.Leiden %>% 
+  mutate(SAMPLE = paste(PTID, VISITNO)) %>%
+  select(PTID, STIM, VISITNO, SAMPLE, Leiden, NSUB, CYTNUM, NSUB_NEG, CYTNUM_NEG)
+names(dt.results_Fisher) <- toupper(names(dt.results_Fisher))
+
+#- Fisher's exact test
+dt.results_Fisher$raw_p <- NA
+for(i in 1:nrow(dt.results_Fisher))
+{
+  pval <- NA
+  x.ant <- dt.results_Fisher[["CYTNUM"]][i]
+  N.ant <- dt.results_Fisher[["NSUB"]][i] - dt.results_Fisher[["CYTNUM"]][i]
+  x.neg <- dt.results_Fisher[["CYTNUM_NEG"]][i]
+  N.neg <- dt.results_Fisher[["NSUB_NEG"]][i] - dt.results_Fisher[["CYTNUM_NEG"]][i]
+  if(!is.na(N.neg) & N.ant > 0 & N.neg > 0) {
+    m <- matrix(c(x.ant, N.ant, x.neg, N.neg), nc = 2, byrow = FALSE)
+    pval <- fisher.test(m, alternative = "greater")$p.value
+  }else{
+    pval <- NA
+  }
+  dt.results_Fisher$raw_p[i] <- pval
+}
+
+#- Correction for multiple testing
+dt.results_Fisher <- dt.results_Fisher %>%
+  group_by(PTID, VISITNO, LEIDEN) %>%
+  mutate(num_tests = n()) %>%
+  mutate(adjvar = "ptid,visitno,leiden") %>%
+  mutate(adjp = p.adjust(p = raw_p, method = "holm")) %>%
+  ungroup()
+
+#- Add positivity results
+dt.Leiden <- dt.Leiden %>%
+  mutate(FISHER_num.tests = plyr::mapvalues(x = paste(PTID, VISITNO, STIM, Leiden), 
+                                            from = paste(dt.results_Fisher$PTID, 
+                                                         dt.results_Fisher$VISITNO, 
+                                                         dt.results_Fisher$STIM,
+                                                         dt.results_Fisher$LEIDEN),
+                                            to = dt.results_Fisher$num_tests, 
+                                            warn_missing = FALSE)) %>%
+  mutate(FISHER_adjvar = "ptid,visitno,leiden") %>%
+  mutate(FISHER_FDR = plyr::mapvalues(x = paste(PTID, VISITNO, STIM, Leiden), 
+                                      from = paste(dt.results_Fisher$PTID, 
+                                                   dt.results_Fisher$VISITNO, 
+                                                   dt.results_Fisher$STIM,
+                                                   dt.results_Fisher$LEIDEN),
+                                      to = dt.results_Fisher$adjp, 
+                                      warn_missing = FALSE)) %>%
+  mutate(FISHER_FDR = FISHER_FDR %>% as.numeric()) %>%
+  mutate(FISHER_call = ifelse(FISHER_FDR < .00001, TRUE, FALSE))
+dt.Leiden$FISHER_call %>% table(useNA = "always")
+
+#- Comparison
+table(dt.Leiden$MIMOSA_call, dt.Leiden$FISHER_call)
+dt.Leiden %>%
+  filter(MIMOSA_call == TRUE) %>%
+  filter(FISHER_call == FALSE) %>%
+  View()
+```
+
+### - Combined responses & Processing
+_____________________________________
+
+Combined peptide pool responses and magnitudes are calculated, including all pools regardless of positive or negative responder status. Negative magnitudes are censored at 0 prior to calculating the sum or maximum (across peptide pools); if the sum or maximum is < 0.001, the sum is set to 0.001 percent. Specifically, the combined overall magnitudes are defined as follows:  
+
+* __Spike Ancestral__ = sum(COV2 CON S1, COV2 CON S2);  
+
+* __Spike BA4/5__ = sum(BA.4-5 S1, BA.4-5 S2);  
+
+* __Any Ancestral__ = sum(COV2 CON S1, COV2 CON S2, Wuhan N, Wuhan E/M);  
+
+* __Any BA4/5__ = sum(BA.4-5 S1, BA.4-5 S2, BA.4-5 N, BA.1-2-4-5 E/M).    
+
+If at least one peptide pool for a specific SARS-CoV-2 protein is positive (`MIMOSA` - FDR 1%), then the overall response to the protein is considered positive. After combined responses are calculated, for individual peptide pools magnitudes < 0.001 are set to 0.001.  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Spike Ancestral
+#- Sum of COV2 CON S1 and COV2 CON S2
+dt.tmp <- dt.Leiden %>%
+  filter(STIM %in% c("COV2 CON S1", "COV2 CON S2")) %>%
+  group_by(PTID, VISITNO, Leiden) %>%
+  filter(n() == 2) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0, 0, PCTPOS_ADJ)) %>%
+  summarize(PCTPOS_ADJ = sum(PCTPOS_ADJ, na.rm = TRUE)) %>%
+  mutate(STIM = "Spike Ancestral")
+#- Add Status (MIMOSA)
+samples <- dt.Leiden %>%
+  filter(STIM %in% c("COV2 CON S1", "COV2 CON S2")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  mutate(SAMPLE = paste(PTID, VISITNO, Leiden)) %>%
+  pull(SAMPLE) %>% 
+  unique()
+dt.tmp <- dt.tmp %>%
+  mutate(MIMOSA_call = ifelse(paste(PTID, VISITNO, Leiden) %in% samples, TRUE, FALSE))
+#- Add results to table
+dt.tmp <- dt.tmp %>%
+  mutate(BATCH = NA) %>%
+  mutate(NSUB = NA) %>%
+  mutate(CYTNUM = NA) %>%
+  mutate(PCTPOS = NA) %>%
+  mutate(NSUB_NEG = NA) %>%
+  mutate(CYTNUM_NEG = NA) %>%
+  mutate(PCTNEG = NA) %>%
+  mutate(MIMOSA_pr_nonresp = NA) %>%
+  mutate(MIMOSA_pr_resp = NA) %>%
+  mutate(MIMOSA_FDR = NA) %>%
+  mutate(FISHER_num.tests = NA) %>%
+  mutate(FISHER_adjvar = NA) %>%
+  mutate(FISHER_FDR = NA) %>%
+  mutate(FISHER_call = NA) %>%
+  select(BATCH, PTID, STIM, VISITNO, Leiden, NSUB, CYTNUM, PCTPOS, NSUB_NEG, CYTNUM_NEG, PCTNEG, PCTPOS_ADJ, MIMOSA_pr_nonresp, MIMOSA_pr_resp, MIMOSA_FDR, MIMOSA_call, FISHER_num.tests, FISHER_adjvar, FISHER_FDR, FISHER_call)
+identical(colnames(dt.Leiden), colnames(dt.tmp)) # TRUE
+dt.Leiden <- bind_rows(dt.Leiden, dt.tmp)
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Spike BA4/5
+#- Sum of BA.4-5 S1 and BA.4-5 S2
+dt.tmp <- dt.Leiden %>%
+  filter(STIM %in% c("BA.4-5 S1", "BA.4-5 S2")) %>%
+  group_by(PTID, VISITNO, Leiden) %>%
+  filter(n() == 2) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0, 0, PCTPOS_ADJ)) %>%
+  summarize(PCTPOS_ADJ = sum(PCTPOS_ADJ, na.rm = TRUE)) %>%
+  mutate(STIM = "Spike BA4/5")
+#- Add Status (MIMOSA)
+samples <- dt.Leiden %>%
+  filter(STIM %in% c("BA.4-5 S1", "BA.4-5 S2")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  mutate(SAMPLE = paste(PTID, VISITNO, Leiden)) %>%
+  pull(SAMPLE) %>% 
+  unique()
+dt.tmp <- dt.tmp %>%
+  mutate(MIMOSA_call = ifelse(paste(PTID, VISITNO, Leiden) %in% samples, TRUE, FALSE))
+#- Add results to table
+dt.tmp <- dt.tmp %>%
+  mutate(BATCH = NA) %>%
+  mutate(NSUB = NA) %>%
+  mutate(CYTNUM = NA) %>%
+  mutate(PCTPOS = NA) %>%
+  mutate(NSUB_NEG = NA) %>%
+  mutate(CYTNUM_NEG = NA) %>%
+  mutate(PCTNEG = NA) %>%
+  mutate(MIMOSA_pr_nonresp = NA) %>%
+  mutate(MIMOSA_pr_resp = NA) %>%
+  mutate(MIMOSA_FDR = NA) %>%
+  mutate(FISHER_num.tests = NA) %>%
+  mutate(FISHER_adjvar = NA) %>%
+  mutate(FISHER_FDR = NA) %>%
+  mutate(FISHER_call = NA) %>%
+  select(BATCH, PTID, STIM, VISITNO, Leiden, NSUB, CYTNUM, PCTPOS, NSUB_NEG, CYTNUM_NEG, PCTNEG, PCTPOS_ADJ, MIMOSA_pr_nonresp, MIMOSA_pr_resp, MIMOSA_FDR, MIMOSA_call, FISHER_num.tests, FISHER_adjvar, FISHER_FDR, FISHER_call)
+identical(colnames(dt.Leiden), colnames(dt.tmp)) # TRUE
+dt.Leiden <- bind_rows(dt.Leiden, dt.tmp)
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Any Ancestral
+#- Sum of COV2 CON S1, COV2 CON S2, Wuhan N and Wuhan E/M
+dt.tmp <- dt.Leiden %>%
+  filter(STIM %in% c("COV2 CON S1", "COV2 CON S2", "Wuhan N", "Wuhan E Wuhan M")) %>%
+  group_by(PTID, VISITNO, Leiden) %>%
+  filter(n() == 4) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0, 0, PCTPOS_ADJ)) %>%
+  summarize(PCTPOS_ADJ = sum(PCTPOS_ADJ, na.rm = TRUE)) %>%
+  mutate(STIM = "Any Ancestral")
+#- Add Status (MIMOSA)
+samples <- dt.Leiden %>%
+  filter(STIM %in% c("COV2 CON S1", "COV2 CON S2", "Wuhan N", "Wuhan E Wuhan M")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  mutate(SAMPLE = paste(PTID, VISITNO, Leiden)) %>%
+  pull(SAMPLE) %>% 
+  unique()
+dt.tmp <- dt.tmp %>%
+  mutate(MIMOSA_call = ifelse(paste(PTID, VISITNO, Leiden) %in% samples, TRUE, FALSE))
+#- Add results to table
+dt.tmp <- dt.tmp %>%
+  mutate(BATCH = NA) %>%
+  mutate(NSUB = NA) %>%
+  mutate(CYTNUM = NA) %>%
+  mutate(PCTPOS = NA) %>%
+  mutate(NSUB_NEG = NA) %>%
+  mutate(CYTNUM_NEG = NA) %>%
+  mutate(PCTNEG = NA) %>%
+  mutate(MIMOSA_pr_nonresp = NA) %>%
+  mutate(MIMOSA_pr_resp = NA) %>%
+  mutate(MIMOSA_FDR = NA) %>%
+  mutate(FISHER_num.tests = NA) %>%
+  mutate(FISHER_adjvar = NA) %>%
+  mutate(FISHER_FDR = NA) %>%
+  mutate(FISHER_call = NA) %>%
+  select(BATCH, PTID, STIM, VISITNO, Leiden, NSUB, CYTNUM, PCTPOS, NSUB_NEG, CYTNUM_NEG, PCTNEG, PCTPOS_ADJ, MIMOSA_pr_nonresp, MIMOSA_pr_resp, MIMOSA_FDR, MIMOSA_call, FISHER_num.tests, FISHER_adjvar, FISHER_FDR, FISHER_call)
+identical(colnames(dt.Leiden), colnames(dt.tmp)) # TRUE
+dt.Leiden <- bind_rows(dt.Leiden, dt.tmp)
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Any BA4/5
+#- Sum of BA.4-5 S1, BA.4-5 S2, BA.4-5 S1, BA.4-5 N and BA.1-2-4-5 E/M
+dt.tmp <- dt.Leiden %>%
+  filter(STIM %in% c("BA.4-5 S1", "BA.4-5 S2", "BA.4-5 N", "BA.1-2-4-5 E / BA.1-2-4-5 M")) %>%
+  group_by(PTID, VISITNO, Leiden) %>%
+  filter(n() == 4) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0, 0, PCTPOS_ADJ)) %>%
+  summarize(PCTPOS_ADJ = sum(PCTPOS_ADJ, na.rm = TRUE)) %>%
+  mutate(STIM = "Any BA4/5")
+#- Add Status (MIMOSA)
+samples <- dt.Leiden %>%
+  filter(STIM %in% c("BA.4-5 S1", "BA.4-5 S2", "BA.4-5 N", "BA.1-2-4-5 E / BA.1-2-4-5 M")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  mutate(SAMPLE = paste(PTID, VISITNO, Leiden)) %>%
+  pull(SAMPLE) %>% 
+  unique()
+dt.tmp <- dt.tmp %>%
+  mutate(MIMOSA_call = ifelse(paste(PTID, VISITNO, Leiden) %in% samples, TRUE, FALSE))
+#- Add results to table
+dt.tmp <- dt.tmp %>%
+  mutate(BATCH = NA) %>%
+  mutate(NSUB = NA) %>%
+  mutate(CYTNUM = NA) %>%
+  mutate(PCTPOS = NA) %>%
+  mutate(NSUB_NEG = NA) %>%
+  mutate(CYTNUM_NEG = NA) %>%
+  mutate(PCTNEG = NA) %>%
+  mutate(MIMOSA_pr_nonresp = NA) %>%
+  mutate(MIMOSA_pr_resp = NA) %>%
+  mutate(MIMOSA_FDR = NA) %>%
+  mutate(FISHER_num.tests = NA) %>%
+  mutate(FISHER_adjvar = NA) %>%
+  mutate(FISHER_FDR = NA) %>%
+  mutate(FISHER_call = NA) %>%
+  select(BATCH, PTID, STIM, VISITNO, Leiden, NSUB, CYTNUM, PCTPOS, NSUB_NEG, CYTNUM_NEG, PCTNEG, PCTPOS_ADJ, MIMOSA_pr_nonresp, MIMOSA_pr_resp, MIMOSA_FDR, MIMOSA_call, FISHER_num.tests, FISHER_adjvar, FISHER_FDR, FISHER_call)
+identical(colnames(dt.Leiden), colnames(dt.tmp)) # TRUE
+dt.Leiden <- bind_rows(dt.Leiden, dt.tmp)
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Processing
+#- Arrange
+dt.Leiden <- dt.Leiden %>%
+  mutate(PCTPOS_ADJ_noadjustment = PCTPOS_ADJ) %>%
+  mutate(PCTPOS_ADJ = ifelse(PCTPOS_ADJ < 0.001, 0.001, PCTPOS_ADJ)) %>%
+  mutate(Leiden = factor(x = Leiden, levels = paste("Leiden:", 1:16))) %>%
+  mutate(STIM = factor(x = STIM, levels = c("Any Ancestral", "Any BA4/5", "Spike Ancestral", "Spike BA4/5", "COV2 CON S1", "COV2 CON S2", "Wuhan N", "Wuhan E Wuhan M", "BA.4-5 S1", "BA.4-5 S2", "BA.4-5 N", "BA.1-2-4-5 E / BA.1-2-4-5 M"))) %>%
+  arrange(PTID, STIM, VISITNO, Leiden) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITNO, from = c("2", "3", "4"), to = c("M0", "M1", "M2")))
+
+#- Ordering
+cols <- c("BATCH", "PTID", "STIM", "VISITNO", "VISITMONTH", "Leiden", 
+          "NSUB", "CYTNUM", "PCTPOS", 
+          "NSUB_NEG", "CYTNUM_NEG", "PCTNEG", 
+          "PCTPOS_ADJ_noadjustment", "PCTPOS_ADJ", 
+          "MIMOSA_pr_nonresp", "MIMOSA_pr_resp", "MIMOSA_FDR", "MIMOSA_call",
+          "FISHER_num.tests", "FISHER_adjvar", "FISHER_FDR", "FISHER_call")
+dt.Leiden <- dt.Leiden[, cols]
+
+#- Output (.csv)
+dt.Leiden %>%
+  write_csv(file = "./dt_Leiden.csv")
+```
+
+### - Box-plots
+_______________
+
+**Exploratory Data Analysis**
+
+All clusters are evaluated in an exploratory data analysis to ensure that the importance of rare cell subsets is not overlooked.  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Box-plots
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+   filter(FASFL == "Y") # 168 PTIDs
+dt.Leiden <- dt.Leiden %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE))
+
+#- dt.ggplot
+dt.ggplot <- dt.Leiden %>%
+  ungroup() %>%
+  filter(!(is.na(MIMOSA_call))) %>%
+  mutate(VISITMONTH = factor(x = VISITMONTH, levels = c("M0", "M1", "M2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "TRUE" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & MIMOSA_call == "TRUE" ~ "#B2DF8A",
+                              RX_CODE %in% "AG3" & MIMOSA_call == "TRUE" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & MIMOSA_call == "TRUE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "FALSE" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & MIMOSA_call == "FALSE" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" & MIMOSA_call == "FALSE" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & MIMOSA_call == "FALSE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITMONTH, from = c("M0", "M1", "M2"), to = c("M0", "M1/2", "M1/2"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(MIMOSA_call = factor(x = MIMOSA_call, levels = c("FALSE", "TRUE"))) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden, MIMOSA_call, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden) %>%
+  mutate(N = sum(n)) %>%
+  mutate(text = paste0(n, "/", N)) %>%
+  mutate(text_2 = paste0(round(n/N*100, 0), "%")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  filter(!(str_detect(string = text, pattern = "NaN"))) %>%
+  filter(text != "0/0") %>%
+  mutate(COLOR_TXT = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1", "AG2-2") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- Fig. (1)
+set.seed(1234)
+cairo_pdf(filename = "boxplot-by-LEIDENxVISITMONTHxGROUP(1).pdf", 
+    width = 6, 
+    height = 6.25, 
+    onefile = TRUE)
+for(antigen in c("Any Ancestral", 
+                 "Any BA4/5", 
+                 "Spike Ancestral", 
+                 "Spike BA4/5", 
+                 "COV2 CON S1", 
+                 "COV2 CON S2", 
+                 "Ancestral N", 
+                 "Ancestral E/M", 
+                 "BA.4-5 S1", 
+                 "BA.4-5 S2", 
+                 "BA4/5 E/M", 
+                 "BA4/5 N")){
+  for(leiden in levels(dt$asinh_asym_Leiden)) {
+    dt.ggplot.tmp <- dt.ggplot %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                           VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                           .default = "Post two\nvaccinations")) %>%
+      mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2")))
+    dt.ggplot.text.tmp <- dt.ggplot.text %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                           VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                           .default = "Post two\nvaccinations")) %>%
+      mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2")))
+    
+    dt.ggplot.tmp %>%
+      arrange(PTID) %>%
+      ggplot() +
+        geom_point(aes(x = X, y = PCTPOS_ADJ, fill = FILL_PCH, color = COLOR_PCH, group = PTID), 
+                   position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                   size = 3, alpha = .7, pch = 21) +
+        geom_line(aes(x = X, y = PCTPOS_ADJ, color = COLOR_LINE, group = PTID), 
+                  position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                  linewidth = .2, alpha = .7) +
+        geom_boxplot(aes(x = X, y = PCTPOS_ADJ, fill = FILL_BX),
+                     alpha = .75, width = .5, outlier.shape = NA) +
+        geom_text(aes(x = X, y = 15, label = text), 
+                  size = 4,
+                  data = dt.ggplot.text.tmp) +
+        geom_text(aes(x = X, y = 8, label = text_2), 
+                  color = "grey40", size = 3,
+                  data = dt.ggplot.text.tmp) +
+        geom_hline(aes(yintercept = 0),
+                   color = "grey60", lty = 2, linewidth = .5,
+                   data = dt.ggplot.tmp %>% filter(FACET_Y == "PLWH")) +
+        facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+        scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2"),
+                         labels = c("Baseline", "Post two\nvaccinations", "Baseline", "Post one\nvaccination"), 
+                         drop = TRUE) +
+        scale_y_continuous(trans = "log10", 
+                           breaks = c(0.001, 0.01, 0.1, 1, 10), 
+                           labels = c("\u22640.001", "0.01", "0.1", "1", "10"), 
+                           limits = c(0.0008, 15)) +
+        scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                     "#B2DF8A" = "#B2DF8A", 
+                                     "#FB9A99" = "#FB9A99", 
+                                     "#FDBF6F" = "#FDBF6F", 
+                                     "white" = "white")) +
+        scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                      "#B2DF8A" = "#B2DF8A", 
+                                      "#FB9A99" = "#FB9A99", 
+                                      "#FDBF6F" = "#FDBF6F", 
+                                      "white" = "white"), guide = "none") +
+        labs(x = NULL, 
+             y = "% of CD4+ T cells\nBackground-subtracted", 
+             fill = NULL,
+             title = paste(antigen, leiden, sep = "\n")) +
+        theme_classic() +
+        theme(axis.text = element_text(size = 12),
+              axis.title = element_text(size = 14),
+              strip.text = element_text(size = 16),
+              title = element_text(size = 16),
+              legend.position = "none") -> plot
+    plot %>% print()
+  }
+}
+dev.off()
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Box-plots
+#- meta.data
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+   filter(FASFL == "Y") # 168 PTIDs
+dt.Leiden <- dt.Leiden %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE))
+
+#- dt.ggplot
+dt.ggplot <- dt.Leiden %>%
+  ungroup() %>%
+  filter(!(is.na(MIMOSA_call))) %>%
+  mutate(VISITMONTH = factor(x = VISITMONTH, levels = c("M0", "M1", "M2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "TRUE" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & MIMOSA_call == "TRUE" ~ "#B2DF8A",
+                              RX_CODE %in% "AG3" & MIMOSA_call == "TRUE" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & MIMOSA_call == "TRUE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "FALSE" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & MIMOSA_call == "FALSE" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" & MIMOSA_call == "FALSE" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & MIMOSA_call == "FALSE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITMONTH, from = c("M0", "M1", "M2"), to = c("M0", "M1/2", "M1/2"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(MIMOSA_call = factor(x = MIMOSA_call, levels = c("FALSE", "TRUE"))) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, COHORT, Leiden, MIMOSA_call, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, COHORT, Leiden) %>%
+  mutate(N = sum(n)) %>%
+  mutate(text = paste0(n, "/", N)) %>%
+  mutate(text_2 = paste0(round(n/N*100, 0), "%")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  filter(!(str_detect(string = text, pattern = "NaN"))) %>%
+  filter(text != "0/0") %>%
+  mutate(COLOR_TXT = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1", "AG2-2") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- Fig. (2)
+set.seed(1234)
+cairo_pdf(filename = "boxplot-by-LEIDENxVISITMONTHxGROUP(2).pdf", 
+    width = 10, 
+    height = 7.25, 
+    onefile = TRUE)
+for(antigen in c("Any Ancestral", 
+                 "Any BA4/5", 
+                 "Spike Ancestral", 
+                 "Spike BA4/5", 
+                 "COV2 CON S1", 
+                 "COV2 CON S2", 
+                 "Ancestral N", 
+                 "Ancestral E/M", 
+                 "BA.4-5 S1", 
+                 "BA.4-5 S2", 
+                 "BA4/5 E/M", 
+                 "BA4/5 N")){
+  for(leiden in levels(dt$asinh_asym_Leiden)) {
+    dt.ggplot.tmp <- dt.ggplot %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                  VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                  .default = "Post two\nvaccinations")) %>%
+      mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination")))
+    dt.ggplot.text.tmp <- dt.ggplot.text %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(X = case_when(COHORT == "case" ~ 1, COHORT == "non-case" ~ 2)) %>%
+      mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                  VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                  .default = "Post two\nvaccinations")) %>%
+      mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination")))
+      
+    dt.ggplot.tmp %>%
+      arrange(PTID) %>%
+      ggplot() +
+        geom_point(aes(x = COHORT, y = PCTPOS_ADJ, fill = FILL_PCH, color = COLOR_PCH, group = PTID), 
+                   position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                   size = 3, alpha = .7, pch = 21) +
+        geom_line(aes(x = COHORT, y = PCTPOS_ADJ, color = COLOR_LINE, group = PTID), 
+                  position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                  linewidth = .2, alpha = .7) +
+        geom_boxplot(aes(x = COHORT, y = PCTPOS_ADJ, fill = FILL_BX),
+                     alpha = .75, width = .5, outlier.shape = NA) +
+        geom_text(aes(x = X, y = 15, label = text), 
+                  size = 4,
+                  data = dt.ggplot.text.tmp) +
+        geom_text(aes(x = X, y = 8, label = text_2), 
+                  color = "grey40", size = 3,
+                  data = dt.ggplot.text.tmp) +
+        geom_hline(aes(yintercept = 0),
+                   color = "grey60", lty = 2, linewidth = .5,
+                   data = dt.ggplot.tmp %>% filter(FACET_Y == "PLWH")) +
+        facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+        #scale_x_discrete(breaks = c("0", "1"), labels = c("non-case", "case")) +
+        scale_y_continuous(trans = "log10", 
+                           breaks = c(0.001, 0.01, 0.1, 1, 10), 
+                           labels = c("\u22640.001", "0.01", "0.1", "1", "10"), 
+                           limits = c(0.0009, 15)) +
+        scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                     "#B2DF8A" = "#B2DF8A", 
+                                     "#FB9A99" = "#FB9A99", 
+                                     "#FDBF6F" = "#FDBF6F", 
+                                     "white" = "white")) +
+        scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                      "#B2DF8A" = "#B2DF8A", 
+                                      "#FB9A99" = "#FB9A99", 
+                                      "#FDBF6F" = "#FDBF6F", 
+                                      "white" = "white"), guide = "none") +
+        labs(x = NULL, 
+             y = "% of CD4+ T cells\nBackground-subtracted", 
+             fill = NULL,
+             title = paste(antigen, leiden, sep = "\n")) +
+        theme_classic() +
+        theme(axis.text = element_text(size = 12),
+              axis.title = element_text(size = 14),
+              strip.text = element_text(size = 16),
+              title = element_text(size = 16),
+              legend.position = "none") -> plot
+    plot %>% print()
+  }
+}
+dev.off()
+```
+
+**Primary Data Analysis**
+
+Any cluster that has a response rate > 20% in at least one VISITNO in the vaccine group is kept for the Primary Data Analysis. This prioritization helps ensure to highlight vaccine-induced clusters.  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Box-plots
+#- meta.data
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+   filter(FASFL == "Y") # 168 PTIDs
+dt.Leiden <- dt.Leiden %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE))
+
+#- Selection
+dt.PDA <- dt.Leiden %>% 
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden, MIMOSA_call) %>%
+  summarize(n = n()) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden) %>%
+  mutate(N = sum(n)) %>% 
+  mutate(freq = n / N) %>%
+  filter(freq > .2 & MIMOSA_call == "TRUE")
+leiden.clusters <- unique(dt.PDA$Leiden)
+leiden.clusters %>% length() # 7 clusters (Leiden: 1, 2, 5, 6, 7, 9, 10)
+leiden.stim <- paste(dt.PDA$Leiden, dt.PDA$STIM) %>% unique()
+dt.PDA %>%
+  filter(RX_CODE == "AG2-1") %>%
+  View()
+
+#- dt.ggplot
+dt.ggplot <- dt.Leiden %>%
+  ungroup() %>%
+  filter(!(is.na(MIMOSA_call))) %>%
+  filter(paste(Leiden, STIM) %in% leiden.stim) %>%
+  mutate(Leiden = factor(x = Leiden, levels = paste("Leiden:", c(1, 2, 5, 6, 7, 9, 10)))) %>%
+  mutate(VISITMONTH = factor(x = VISITMONTH, levels = c("M0", "M1", "M2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "TRUE" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & MIMOSA_call == "TRUE" ~ "#B2DF8A",
+                              RX_CODE %in% "AG3" & MIMOSA_call == "TRUE" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & MIMOSA_call == "TRUE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "FALSE" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & MIMOSA_call == "FALSE" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" & MIMOSA_call == "FALSE" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & MIMOSA_call == "FALSE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITMONTH, from = c("M0", "M1", "M2"), to = c("M0", "M1/2", "M1/2"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(MIMOSA_call = factor(x = MIMOSA_call, levels = c("FALSE", "TRUE"))) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden, MIMOSA_call, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden) %>%
+  mutate(N = sum(n)) %>%
+  mutate(text = paste0(n, "/", N)) %>%
+  mutate(text_2 = paste0(round(n/N*100, 0), "%")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  filter(!(str_detect(string = text, pattern = "NaN"))) %>%
+  filter(text != "0/0") %>%
+  mutate(COLOR_TXT = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1", "AG2-2") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- Fig. (1)
+set.seed(1234)
+cairo_pdf(filename = "boxplot-by-LEIDENxVISITMONTHxGROUP(1)_filt.pdf", 
+    width = 6, 
+    height = 6.25, 
+    onefile = TRUE)
+for(antigen in c("Any Ancestral", 
+                 "Any BA4/5", 
+                 "Spike Ancestral", 
+                 "Spike BA4/5", 
+                 "COV2 CON S1", 
+                 "COV2 CON S2", 
+                 "Ancestral N", 
+                 "Ancestral E/M", 
+                 "BA.4-5 S1", 
+                 "BA.4-5 S2", 
+                 "BA4/5 E/M", 
+                 "BA4/5 N")){
+  leiden.tmp <- dt.ggplot %>%
+    filter(STIM == antigen) %>%
+    pull(Leiden) %>%
+    unique()
+  for(leiden in leiden.tmp) {
+    dt.ggplot.tmp <- dt.ggplot %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                           VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                           .default = "Post two\nvaccinations")) %>%
+      mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2")))
+    dt.ggplot.text.tmp <- dt.ggplot.text %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                           VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                           VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                           .default = "Post two\nvaccinations")) %>%
+      mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2")))
+    
+    dt.ggplot.tmp %>%
+      arrange(PTID) %>%
+      ggplot() +
+        geom_point(aes(x = X, y = PCTPOS_ADJ, fill = FILL_PCH, color = COLOR_PCH, group = PTID), 
+                   position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                   size = 3, alpha = .7, pch = 21) +
+        geom_line(aes(x = X, y = PCTPOS_ADJ, color = COLOR_LINE, group = PTID), 
+                  position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                  linewidth = .2, alpha = .7) +
+        geom_boxplot(aes(x = X, y = PCTPOS_ADJ, fill = FILL_BX),
+                     alpha = .75, width = .5, outlier.shape = NA) +
+        geom_text(aes(x = X, y = 15, label = text), 
+                  size = 4,
+                  data = dt.ggplot.text.tmp) +
+        geom_text(aes(x = X, y = 8, label = text_2), 
+                  color = "grey40", size = 3,
+                  data = dt.ggplot.text.tmp) +
+        geom_hline(aes(yintercept = 0),
+                   color = "grey60", lty = 2, linewidth = .5,
+                   data = dt.ggplot.tmp %>% filter(FACET_Y == "PLWH")) +
+        facet_grid(FACET_Y ~ FACET_X, scales = "free_x", space = "free_x") +
+        scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations", "Baseline_2", "Post one\nvaccination_2"),
+                         labels = c("Baseline", "Post two\nvaccinations", "Baseline", "Post one\nvaccination"), 
+                         drop = TRUE) +
+        scale_y_continuous(trans = "log10", 
+                           breaks = c(0.001, 0.01, 0.1, 1, 10), 
+                           labels = c("\u22640.001", "0.01", "0.1", "1", "10"), 
+                           limits = c(0.0009, 15)) +
+        scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                     "#B2DF8A" = "#B2DF8A", 
+                                     "#FB9A99" = "#FB9A99", 
+                                     "#FDBF6F" = "#FDBF6F", 
+                                     "white" = "white")) +
+        scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                      "#B2DF8A" = "#B2DF8A", 
+                                      "#FB9A99" = "#FB9A99", 
+                                      "#FDBF6F" = "#FDBF6F", 
+                                      "white" = "white"), guide = "none") +
+        labs(x = NULL, 
+             y = "% of CD4+ T cells\nBackground-subtracted", 
+             fill = NULL,
+             title = paste(antigen, leiden, sep = "\n")) +
+        theme_classic() +
+        theme(axis.text = element_text(size = 12),
+              axis.title = element_text(size = 14),
+              strip.text = element_text(size = 16),
+              title = element_text(size = 16),
+              legend.position = "none") -> plot
+    plot %>% print()
+  }
+}
+dev.off()
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Box-plots
+#- meta.data
+meta.data <- read_csv("./COVID_realdata_ics_bama_nab_bcp20241023_processed_with_riskscore.csv") %>%
+  filter(ph2.m1.ics.cohort == "1") %>%
+   filter(FASFL == "Y") # 168 PTIDs
+dt.Leiden <- dt.Leiden %>%
+  mutate(RX_CODE = plyr::mapvalues(x = PTID, 
+                                   from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                   to = meta.data$AGRP2N, 
+                                   warn_missing = FALSE)) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("1", "2.1", "3", "4.1"), 
+                                   to = c("AG1", "AG2-1", "AG3", "AG4-1"), 
+                                   warn_missing = FALSE)) %>%
+  mutate(COHORT = plyr::mapvalues(x = PTID, 
+                                  from = str_remove(string = meta.data$Subjectid, pattern = "C3008[-]"),
+                                  to = meta.data$EventIndPrimary1, 
+                                  warn_missing = FALSE))  %>%
+  mutate(COHORT = plyr::mapvalues(x = COHORT, 
+                                  from = c("1", "0"), 
+                                  to = c("case", "non-case"), 
+                                  warn_missing = FALSE))
+
+#- Selection
+dt.PDA <- dt.Leiden %>% 
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden, MIMOSA_call) %>%
+  summarize(n = n()) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, Leiden) %>%
+  mutate(N = sum(n)) %>% 
+  mutate(freq = n / N) %>%
+  filter(freq > .2 & MIMOSA_call == "TRUE")
+leiden.clusters <- unique(dt.PDA$Leiden)
+leiden.clusters %>% length() # 7 clusters (Leiden: 1, 2, 5, 6, 7, 9, 10)
+leiden.stim <- paste(dt.PDA$Leiden, dt.PDA$STIM) %>% unique()
+
+#- dt.ggplot
+dt.ggplot <- dt.Leiden %>%
+  ungroup() %>%
+  filter(!(is.na(MIMOSA_call))) %>%
+  filter(paste(Leiden, STIM) %in% leiden.stim) %>%
+  mutate(Leiden = factor(x = Leiden, levels = paste("Leiden:", c(1, 2, 5, 6, 7, 9, 10)))) %>%
+  mutate(VISITMONTH = factor(x = VISITMONTH, levels = c("M0", "M1", "M2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "TRUE" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & MIMOSA_call == "TRUE" ~ "#B2DF8A",
+                              RX_CODE %in% "AG3" & MIMOSA_call == "TRUE" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & MIMOSA_call == "TRUE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & MIMOSA_call == "FALSE" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & MIMOSA_call == "FALSE" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" & MIMOSA_call == "FALSE" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & MIMOSA_call == "FALSE" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             .default = "white")) %>%
+  mutate(FILL_BX = factor(x = FILL_BX, levels = c("#FB9A99", "#FDBF6F", "#A6CEE3", "#B2DF8A"))) %>%
+  mutate(VISITMONTH = plyr::mapvalues(x = VISITMONTH, from = c("M0", "M1", "M2"), to = c("M0", "M1/2", "M1/2"))) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(STIM = case_when(STIM == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                          STIM == "Wuhan N" ~ "Ancestral N",
+                          STIM == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                          STIM == "BA.4-5 N" ~ "BA4/5 N",
+                          .default = STIM)) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(MIMOSA_call = factor(x = MIMOSA_call, levels = c("FALSE", "TRUE"))) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, COHORT, Leiden, MIMOSA_call, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(RX_CODE, STIM, VISITMONTH, COHORT, Leiden) %>%
+  mutate(N = sum(n)) %>%
+  mutate(text = paste0(n, "/", N)) %>%
+  mutate(text_2 = paste0(round(n/N*100, 0), "%")) %>%
+  filter(MIMOSA_call == "TRUE") %>%
+  filter(!(str_detect(string = text, pattern = "NaN"))) %>%
+  filter(text != "0/0") %>%
+  mutate(COLOR_TXT = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                               RX_CODE %in% "AG3" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG3", "AG4-1", "AG1", "AG2-1"))) %>%
+  mutate(FACET_X = case_when(RX_CODE %in% c("AG1", "AG3") ~ "SARS2-", .default = "SARS2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("SARS2-", "SARS2+"))) %>%
+  mutate(FACET_Y = case_when(RX_CODE %in% c("AG1", "AG2-1", "AG2-2") ~ "PLWH", .default = "PWoH")) %>%
+  mutate(FACET_Y = factor(x = FACET_Y, levels = c("PLWH", "PWoH")))
+
+#- Fig. (2)
+set.seed(1234)
+cairo_pdf(filename = "boxplot-by-LEIDENxVISITMONTHxGROUP(2)_filt.pdf", 
+    width = 10, 
+    height = 7.25, 
+    onefile = TRUE)
+for(antigen in c("Any Ancestral", 
+                 "Any BA4/5", 
+                 "Spike Ancestral", 
+                 "Spike BA4/5", 
+                 "COV2 CON S1", 
+                 "COV2 CON S2", 
+                 "Ancestral N", 
+                 "Ancestral E/M", 
+                 "BA.4-5 S1", 
+                 "BA.4-5 S2", 
+                 "BA4/5 E/M", 
+                 "BA4/5 N")){
+  leiden.tmp <- dt.ggplot %>%
+    filter(STIM == antigen) %>%
+    pull(Leiden) %>%
+    unique()
+  for(leiden in leiden.tmp) {
+    dt.ggplot.tmp <- dt.ggplot %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                  VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                  .default = "Post two\nvaccinations")) %>%
+      mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination")))
+    dt.ggplot.text.tmp <- dt.ggplot.text %>%
+      filter(STIM == antigen) %>%
+      filter(Leiden == leiden) %>%
+      mutate(X = case_when(COHORT == "case" ~ 1, COHORT == "non-case" ~ 2)) %>%
+      mutate(FACET_X2 = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                                  VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline",
+                                  VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination",
+                                  .default = "Post two\nvaccinations")) %>%
+      mutate(FACET_X2 = factor(x = FACET_X2, levels = c("Baseline", "Post two\nvaccinations", "Post one\nvaccination")))
+      
+    dt.ggplot.tmp %>%
+      arrange(PTID) %>%
+      ggplot() +
+        geom_point(aes(x = COHORT, y = PCTPOS_ADJ, fill = FILL_PCH, color = COLOR_PCH, group = PTID), 
+                   position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                   size = 3, alpha = .7, pch = 21) +
+        geom_line(aes(x = COHORT, y = PCTPOS_ADJ, color = COLOR_LINE, group = PTID), 
+                  position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                  linewidth = .2, alpha = .7) +
+        geom_boxplot(aes(x = COHORT, y = PCTPOS_ADJ, fill = FILL_BX),
+                     alpha = .75, width = .5, outlier.shape = NA) +
+        geom_text(aes(x = X, y = 15, label = text), 
+                  size = 4,
+                  data = dt.ggplot.text.tmp) +
+        geom_text(aes(x = X, y = 8, label = text_2), 
+                  color = "grey40", size = 3,
+                  data = dt.ggplot.text.tmp) +
+        geom_hline(aes(yintercept = 0),
+                   color = "grey60", lty = 2, linewidth = .5,
+                   data = dt.ggplot.tmp %>% filter(FACET_Y == "PLWH")) +
+        facet_grid(FACET_Y ~ FACET_X + FACET_X2, scales = "free_x", space = "free_x") +
+        #scale_x_discrete(breaks = c("0", "1"), labels = c("non-case", "case")) +
+        scale_y_continuous(trans = "log10", 
+                           breaks = c(0.001, 0.01, 0.1, 1, 10), 
+                           labels = c("\u22640.001", "0.01", "0.1", "1", "10"), 
+                           limits = c(0.0009, 15)) +
+        scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                     "#B2DF8A" = "#B2DF8A", 
+                                     "#FB9A99" = "#FB9A99", 
+                                     "#FDBF6F" = "#FDBF6F", 
+                                     "white" = "white")) +
+        scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                      "#B2DF8A" = "#B2DF8A", 
+                                      "#FB9A99" = "#FB9A99", 
+                                      "#FDBF6F" = "#FDBF6F", 
+                                      "white" = "white"), guide = "none") +
+        labs(x = NULL, 
+             y = "% of CD4+ T cells\nBackground-subtracted", 
+             fill = NULL,
+             title = paste(antigen, leiden, sep = "\n")) +
+        theme_classic() +
+        theme(axis.text = element_text(size = 12),
+              axis.title = element_text(size = 14),
+              strip.text = element_text(size = 16),
+              title = element_text(size = 16),
+              legend.position = "none") -> plot
+    plot %>% print()
+  }
+}
+dev.off()
+```
+

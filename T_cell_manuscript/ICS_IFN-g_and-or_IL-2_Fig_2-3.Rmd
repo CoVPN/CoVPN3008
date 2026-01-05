@@ -1,0 +1,1061 @@
+---
+title: "- ICS - IFN-g and/or IL-2 -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(data.table)
+library(doMC)
+library(cowplot)
+```
+
+# - MIMOSA & Figures
+____________________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+##-- Running MIMOSA
+# We stratify by PTID, VISIT, CYTOKINE, and TCELL. Within each unique set of levels in that group, we'll have all the different stimulations for a subject.
+# We fit a separate model for each visit, T cell subset and antigen across all subjects.
+# Cytokine is not included in the formula because we filter to IFN-g and/or IL-2.
+#F <- as.formula(NSUB + CYTNUM ~ PUBID | ANTIGEN + VISITNO + TCELLSUB)
+#mimosa.res <- MIMOSA::MIMOSA(formula = F,
+#                             data = E,
+#                             ref = RefTreat %in% "Reference",
+#                             subset = RefTreat %in% "Treatment", 
+#                             method = "mcmc",
+#                             iter = 250000,
+#                             burn = 50000)
+
+
+##-- Data
+#- Data
+dt.MIMOSA <- read_csv("./CoVPN3008_ICS_PT_cohort_sample_20240904_VV.csv") %>% 
+  mutate(Mimosa.call = case_when(Mimosa_Pr_resp > 0.999 ~ TRUE, .default = FALSE))
+dt <- read_csv(file = "./CoVPN3008_ICS_PT_cohort_sample_20240903.csv")
+
+#- Merge
+merge(x = dt, 
+      y = dt.MIMOSA %>%
+        select(pubid, antigen, visitno, tcellsub, Mimosa.call),
+      by.x = c("pubid", "antigen", "visitno", "tcellsub"),
+      by.y = c("pubid", "antigen", "visitno", "tcellsub"),
+      all.x = TRUE) -> dt
+
+#- MIMOSA calls for Any and Spike Ancestral / BA.4/5
+dt.tmp_1 <- dt %>%
+  filter(antigen %in% c("COV2 CON S1", "COV2 CON S2", "Wuhan E Wuhan M", "Wuhan N")) %>%
+  group_by(pubid, visitno, tcellsub, cytokine) %>%
+  summarise(MIMOSA = paste(Mimosa.call, collapse = "_")) %>%
+  mutate(Mimosa.call = case_when(str_detect(string = MIMOSA, pattern = "TRUE") ~ "TRUE", .default = "FALSE")) %>%
+  mutate(SAMPLE = paste(pubid, visitno, tcellsub, cytokine, "Any Wuhan")) %>%
+  filter(Mimosa.call == "TRUE")
+dt.tmp_2 <- dt %>%
+  filter(antigen %in% c("BA.4-5 S1", "BA.4-5 S2", "BA.1-2-4-5 E / BA.1-2-4-5 M", "BA.4-5 N")) %>%
+  group_by(pubid, visitno, tcellsub, cytokine) %>%
+  summarise(MIMOSA = paste(Mimosa.call, collapse = "_")) %>%
+  mutate(Mimosa.call = case_when(str_detect(string = MIMOSA, pattern = "TRUE") ~ "TRUE", .default = "FALSE")) %>%
+  mutate(SAMPLE = paste(pubid, visitno, tcellsub, cytokine, "Any BA.4/5")) %>%
+  filter(Mimosa.call == "TRUE")
+dt.tmp_3 <- dt %>%
+  filter(antigen %in% c("COV2 CON S1", "COV2 CON S2")) %>%
+  group_by(pubid, visitno, tcellsub, cytokine) %>%
+  summarise(MIMOSA = paste(Mimosa.call, collapse = "_")) %>%
+  mutate(Mimosa.call = case_when(str_detect(string = MIMOSA, pattern = "TRUE") ~ "TRUE", .default = "FALSE")) %>%
+  mutate(SAMPLE = paste(pubid, visitno, tcellsub, cytokine, "Spike Wuhan")) %>%
+  filter(Mimosa.call == "TRUE")
+dt.tmp_4 <- dt %>%
+  filter(antigen %in% c("BA.4-5 S1", "BA.4-5 S2")) %>%
+  group_by(pubid, visitno, tcellsub, cytokine) %>%
+  summarise(MIMOSA = paste(Mimosa.call, collapse = "_")) %>%
+  mutate(Mimosa.call = case_when(str_detect(string = MIMOSA, pattern = "TRUE") ~ "TRUE", .default = "FALSE")) %>%
+  mutate(SAMPLE = paste(pubid, visitno, tcellsub, cytokine, "Spike BA.4/5")) %>%
+  filter(Mimosa.call == "TRUE")
+dt.tmp <- bind_rows(dt.tmp_1, dt.tmp_2, dt.tmp_3, dt.tmp_4)
+
+#- Add MIMOSA calls
+dt_1 <- dt %>%
+  filter(antigen %in% c("Any Wuhan", "Spike Wuhan", "Any BA.4/5", "Spike BA.4/5")) %>%
+  mutate(Mimosa.call = case_when(paste(pubid, visitno, tcellsub, cytokine, antigen) %in% dt.tmp$SAMPLE ~ TRUE, .default = FALSE))
+dt <- bind_rows(dt_1,
+                dt %>%
+                  filter(!(antigen %in% c("Any Wuhan", "Spike Wuhan", "Any BA.4/5", "Spike BA.4/5")))) %>%
+  arrange(agrp2n, pubid, visitno, tcellsub, antigen)
+
+#- Filtering
+dt <- dt %>%
+  filter(immfl == "Y" & immincfl == "Y" & pprem6ifl == "Y") %>% 
+  mutate(VISITMONTH = plyr::mapvalues(x = visitno, from = c("2", "3", "4"), to = c("M0", "M1", "M2"))) %>%
+  mutate(RX_CODE = case_when(agrp2n == "1" ~ "Group 1",
+                             agrp2n == "2.1" ~ "Group 2-I",
+                             agrp2n == "2.2" ~ "Group 2-II",
+                             agrp2n == "3" ~ "Group 3",
+                             agrp2n == "4.1" ~ "Group 4-I",
+                             agrp2n == "4.2" ~ "Group 4-II",
+                             .default = NA))
+```
+
+## - Fig. 2A
+____________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt %>%
+  mutate(response = case_when(Mimosa.call == TRUE ~ "1", .default = "0")) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  filter(VISITMONTH == "M0") %>%
+  filter(!(antigen %in% c("Any Wuhan", "Any BA.4/5"))) %>%
+  filter(!(antigen %in% c("COV2 CON S1", "COV2 CON S2", "BA.4-5 S1", "BA.4-5 S2"))) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike Wuhan", replacement = "Spike Ancestral")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike BA.4/5", replacement = "Spike BA4/5")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan E Wuhan M", replacement = "Ancestral E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan N", replacement = "Ancestral N")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.1-2-4-5 E / BA.1-2-4-5 M", replacement = "BA4/5 E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.4-5 N", replacement = "BA4/5 N")) %>%
+  filter(antigen %in% c("Spike BA4/5", "BA4/5 E/M", "BA4/5 N")) %>%
+  mutate(antigen = paste(antigen, RX_CODE)) %>%
+  mutate(antigen = factor(x = antigen, 
+                          levels = c("Spike BA4/5 AG1", "BA4/5 N AG1", "BA4/5 E/M AG1",
+                                     "Spike BA4/5 AG3", "BA4/5 N AG3", "BA4/5 E/M AG3",
+                                     "Spike BA4/5 AG2-1", "BA4/5 N AG2-1", "BA4/5 E/M AG2-1",
+                                     "Spike BA4/5 AG2-2", "BA4/5 N AG2-2", "BA4/5 E/M AG2-2",
+                                     "Spike BA4/5 AG4-1", "BA4/5 N AG4-1", "BA4/5 E/M AG4-1",
+                                     "Spike BA4/5 AG4-2", "BA4/5 N AG4-2", "BA4/5 E/M AG4-2"))) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white")) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & response == "1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & response == "1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" & response == "1" ~ "#33A02C",
+                              RX_CODE %in% "AG3" & response == "1" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & response == "1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" & response == "1" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & response == "0" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & response == "0" ~ "#B2DF8A",
+                               RX_CODE %in% "AG2-2" & response == "0" ~ "#33A02C",
+                               RX_CODE %in% "AG3" & response == "0" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & response == "0" ~ "#FDBF6F",
+                               RX_CODE %in% "AG4-2" & response == "0" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG1", "AG3", "AG2-1", "AG2-2", "AG4-1", "AG4-2"))) %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+"))) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj < 0.01 ~ 0.01, .default = pctpos_adj))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(antigen = antigen %>% as.character()) %>%
+  mutate(response = factor(x = response, levels = c("0", "1"))) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH, response, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH) %>%
+  mutate(N = sum(n)) %>%
+  mutate(value = round(x = n / N * 100, digits = 0)) %>%
+  mutate(text = paste0(value, "%")) %>%
+  mutate(text_2 = paste0(n, "/", N)) %>%
+  filter(response == "1") %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+")))
+
+#- Fig.
+cairo_pdf(file = "Fig_2A.pdf", 
+    width = 12, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+jitter_pos <- position_jitter(width = 0.25, seed = 123)
+dt.ggplot %>%
+  filter(tcellsub == "4+") %>%
+  arrange(RX_CODE_FACET, pubid, antigen) %>%
+  ggplot(aes(x = antigen, y = pctpos_adj)) +
+    geom_line(aes(group = pubid),
+              color = "grey80", alpha = .25, position = jitter_pos) +
+    geom_point(aes(fill = FILL_PCH, color = COLOR_PCH, group = FILL_BX),
+              size = 2, alpha = 1, pch = 21, position = jitter_pos) +
+    geom_boxplot(aes(fill = FILL_BX), 
+                 width = .75, alpha = .5, outlier.shape = NA,
+                 data = dt.ggplot %>%
+                   filter(tcellsub == "4+") %>%
+                   filter(response %in% c(1, 0))) +
+    geom_text(aes(x = antigen, y = 2, label = text), 
+              size = 4.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "4+")) +
+    geom_text(aes(x = antigen, y = 1.5, label = text_2), 
+              color = "grey40", size = 3.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "4+")) +
+    geom_vline(aes(xintercept = 3.5), 
+               color = "grey60", lty = 2, linewidth = .25,
+               data = dt.ggplot %>% 
+                 filter(tcellsub == "4+") %>% 
+                 filter(RX_CODE_FACET %in% c("PLWH, SARS2+", "PWoH, SARS2+"))) +
+    facet_grid(~ RX_CODE_FACET, scales = "free_x", space = "free_x") +
+    scale_x_discrete(labels = c("BA4/5 Spike", "BA4/5 N", "BA4/5 E/M",
+                                "BA4/5 Spike", "BA4/5 N", "BA4/5 E/M")) +
+    scale_y_continuous(trans = "log10", 
+                       breaks = c(0.01, 0.1, 1, 10), 
+                       labels = c("\u22640.01", "0.1", "1", "10"), 
+                       limits = c(0.009, 2)) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                 "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                  "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                  "white" = "white")) +
+    labs(x = NULL, y = "% of CD4+ T cells expressing IFN-\u03B3 and/or IL-2\nBackground-subtracted") +
+    theme_classic() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 13),
+          strip.text = element_text(size = 16),
+          legend.position = "none") -> plot
+plot
+dev.off()
+```
+
+## - Suppl. Fig. 1A
+___________________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt %>%
+  mutate(response = case_when(Mimosa.call == TRUE ~ "1", .default = "0")) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  filter(VISITMONTH == "M0") %>%
+  filter(!(antigen %in% c("Any Wuhan", "Any BA.4/5"))) %>%
+  filter(!(antigen %in% c("COV2 CON S1", "COV2 CON S2", "BA.4-5 S1", "BA.4-5 S2"))) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike Wuhan", replacement = "Spike Ancestral")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike BA.4/5", replacement = "Spike BA4/5")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan E Wuhan M", replacement = "Ancestral E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan N", replacement = "Ancestral N")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.1-2-4-5 E / BA.1-2-4-5 M", replacement = "BA4/5 E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.4-5 N", replacement = "BA4/5 N")) %>%
+  filter(antigen %in% c("Spike Ancestral", "Ancestral E/M", "Ancestral N")) %>%
+  mutate(antigen = paste(antigen, RX_CODE)) %>%
+  mutate(antigen = factor(x = antigen, 
+                          levels = c("Spike Ancestral AG1", "Ancestral N AG1", "Ancestral E/M AG1",
+                                     "Spike Ancestral AG3", "Ancestral N AG3", "Ancestral E/M AG3", 
+                                     "Spike Ancestral AG2-1", "Ancestral N AG2-1", "Ancestral E/M AG2-1", 
+                                     "Spike Ancestral AG2-2", "Ancestral N AG2-2", "Ancestral E/M AG2-2", 
+                                     "Spike Ancestral AG4-1", "Ancestral N AG4-1", "Ancestral E/M AG4-1", 
+                                     "Spike Ancestral AG4-2", "Ancestral N AG4-2", "Ancestral E/M AG4-2"))) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white")) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & response == "1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & response == "1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" & response == "1" ~ "#33A02C",
+                              RX_CODE %in% "AG3" & response == "1" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & response == "1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" & response == "1" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & response == "0" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & response == "0" ~ "#B2DF8A",
+                               RX_CODE %in% "AG2-2" & response == "0" ~ "#33A02C",
+                               RX_CODE %in% "AG3" & response == "0" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & response == "0" ~ "#FDBF6F",
+                               RX_CODE %in% "AG4-2" & response == "0" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG1", "AG3", "AG2-1", "AG2-2", "AG4-1", "AG4-2"))) %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+"))) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj < 0.01 ~ 0.01, .default = pctpos_adj))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(antigen = antigen %>% as.character()) %>%
+  mutate(response = factor(x = response, levels = c("0", "1"))) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH, response, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH) %>%
+  mutate(N = sum(n)) %>%
+  mutate(value = round(x = n / N * 100, digits = 0)) %>%
+  mutate(text = paste0(value, "%")) %>%
+  mutate(text_2 = paste0(n, "/", N)) %>%
+  filter(response == "1") %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+")))
+
+#- Fig.
+cairo_pdf(file = "Supp_Fig_1A.pdf", 
+    width = 12, 
+    height = 4.7, 
+    pointsize = 12, 
+    onefile = TRUE)
+jitter_pos <- position_jitter(width = 0.25, seed = 123)
+dt.ggplot %>%
+  filter(tcellsub == "4+") %>%
+  arrange(RX_CODE_FACET, pubid, antigen) %>%
+  ggplot(aes(x = antigen, y = pctpos_adj)) +
+    geom_line(aes(group = pubid),
+              color = "grey80", alpha = .25, position = jitter_pos) +
+    geom_point(aes(fill = FILL_PCH, color = COLOR_PCH, group = FILL_BX),
+              size = 2, alpha = 1, pch = 21, position = jitter_pos) +
+    geom_boxplot(aes(fill = FILL_BX), 
+                 width = .75, alpha = .5, outlier.shape = NA,
+                 data = dt.ggplot %>%
+                   filter(tcellsub == "4+") %>%
+                   filter(response %in% c(1, 0))) +
+    geom_text(aes(x = antigen, y = 2, label = text), 
+              size = 4.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "4+")) +
+    geom_text(aes(x = antigen, y = 1.5, label = text_2), 
+              color = "grey40", size = 3.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "4+")) +
+    geom_vline(aes(xintercept = 3.5), 
+               color = "grey60", lty = 2, linewidth = .25,
+               data = dt.ggplot %>% 
+                 filter(tcellsub == "4+") %>% 
+                 filter(RX_CODE_FACET %in% c("PLWH, SARS2+", "PWoH, SARS2+"))) +
+    facet_grid(~ RX_CODE_FACET, scales = "free_x", space = "free_x") +
+    scale_x_discrete(labels = c("Ancestral Spike", "Ancestral N", "Ancestral E/M",
+                                "Ancestral Spike", "Ancestral N", "Ancestral E/M")) +
+    scale_y_continuous(trans = "log10", 
+                       breaks = c(0.01, 0.1, 1, 10), 
+                       labels = c("\u22640.01", "0.1", "1", "10"), 
+                       limits = c(0.009, 2)) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                 "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                  "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                  "white" = "white")) +
+    labs(x = NULL, y = "% of CD4+ T cells expressing IFN-\u03B3 and/or IL-2\nBackground-subtracted") +
+    theme_classic() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 13),
+          strip.text = element_text(size = 16),
+          legend.position = "none") -> plot
+plot
+dev.off()
+```
+
+## - Fig. 2B
+____________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt %>%
+  mutate(response = case_when(Mimosa.call == TRUE ~ "1", .default = "0")) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  filter(VISITMONTH == "M0") %>%
+  filter(!(antigen %in% c("Any Wuhan", "Any BA.4/5"))) %>%
+  filter(!(antigen %in% c("COV2 CON S1", "COV2 CON S2", "BA.4-5 S1", "BA.4-5 S2"))) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike Wuhan", replacement = "Spike Ancestral")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike BA.4/5", replacement = "Spike BA4/5")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan E Wuhan M", replacement = "Ancestral E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan N", replacement = "Ancestral N")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.1-2-4-5 E / BA.1-2-4-5 M", replacement = "BA4/5 E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.4-5 N", replacement = "BA4/5 N")) %>%
+  filter(antigen %in% c("Spike BA4/5", "BA4/5 E/M", "BA4/5 N")) %>%
+  mutate(antigen = paste(antigen, RX_CODE)) %>%
+  mutate(antigen = factor(x = antigen, 
+                          levels = c("Spike BA4/5 AG1", "BA4/5 N AG1", "BA4/5 E/M AG1",
+                                     "Spike BA4/5 AG3", "BA4/5 N AG3", "BA4/5 E/M AG3",
+                                     "Spike BA4/5 AG2-1", "BA4/5 N AG2-1", "BA4/5 E/M AG2-1",
+                                     "Spike BA4/5 AG2-2", "BA4/5 N AG2-2", "BA4/5 E/M AG2-2",
+                                     "Spike BA4/5 AG4-1", "BA4/5 N AG4-1", "BA4/5 E/M AG4-1",
+                                     "Spike BA4/5 AG4-2", "BA4/5 N AG4-2", "BA4/5 E/M AG4-2"))) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white")) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & response == "1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & response == "1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" & response == "1" ~ "#33A02C",
+                              RX_CODE %in% "AG3" & response == "1" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & response == "1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" & response == "1" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & response == "0" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & response == "0" ~ "#B2DF8A",
+                               RX_CODE %in% "AG2-2" & response == "0" ~ "#33A02C",
+                               RX_CODE %in% "AG3" & response == "0" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & response == "0" ~ "#FDBF6F",
+                               RX_CODE %in% "AG4-2" & response == "0" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG1", "AG3", "AG2-1", "AG2-2", "AG4-1", "AG4-2"))) %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+"))) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj < 0.01 ~ 0.01, .default = pctpos_adj))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(antigen = antigen %>% as.character()) %>%
+  mutate(response = factor(x = response, levels = c("0", "1"))) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH, response, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH) %>%
+  mutate(N = sum(n)) %>%
+  mutate(value = round(x = n / N * 100, digits = 0)) %>%
+  mutate(text = paste0(value, "%")) %>%
+  mutate(text_2 = paste0(n, "/", N)) %>%
+  filter(response == "1") %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+")))
+
+#- Fig.
+cairo_pdf(file ="Fig_2B.pdf", 
+    width = 12, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+jitter_pos <- position_jitter(width = 0.25, seed = 123)
+dt.ggplot %>%
+  filter(tcellsub == "8+") %>%
+  arrange(RX_CODE_FACET, pubid, antigen) %>%
+  ggplot(aes(x = antigen, y = pctpos_adj)) +
+    geom_line(aes(group = pubid),
+              color = "grey80", alpha = .25, position = jitter_pos) +
+    geom_point(aes(fill = FILL_PCH, color = COLOR_PCH, group = FILL_BX),
+              size = 2, alpha = 1, pch = 21, position = jitter_pos) +
+    geom_boxplot(aes(fill = FILL_BX), 
+                 width = .75, alpha = .5, outlier.shape = NA,
+                 data = dt.ggplot %>%
+                   filter(tcellsub == "8+") %>%
+                   filter(response %in% c(1, 0))) +
+    geom_text(aes(x = antigen, y = 8, label = text), 
+              size = 4.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "8+")) +
+    geom_text(aes(x = antigen, y = 5.5, label = text_2), 
+              color = "grey40", size = 3.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "8+")) +
+    geom_vline(aes(xintercept = 3.5), 
+               color = "grey60", lty = 2, linewidth = .25,
+               data = dt.ggplot %>% 
+                 filter(tcellsub == "8+") %>% 
+                 filter(RX_CODE_FACET %in% c("PLWH, SARS2+", "PWoH, SARS2+"))) +
+    facet_grid(~ RX_CODE_FACET, scales = "free_x", space = "free_x") +
+    scale_x_discrete(labels = c("BA4/5 Spike", "BA4/5 N", "BA4/5 E/M",
+                                "BA4/5 Spike", "BA4/5 N", "BA4/5 E/M")) +
+    scale_y_continuous(trans = "log10", 
+                       breaks = c(0.01, 0.1, 1, 10), 
+                       labels = c("\u22640.01", "0.1", "1", "10"), 
+                       limits = c(0.009, 8)) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                 "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                  "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                  "white" = "white")) +
+    labs(x = NULL, y = "% of CD8+ T cells expressing IFN-\u03B3 and/or IL-2\nBackground-subtracted") +
+    theme_classic() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 13),
+          strip.text = element_text(size = 16),
+          legend.position = "none") -> plot
+plot
+dev.off()
+```
+
+## - Suppl. Fig. 1B
+___________________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt %>%
+  mutate(response = case_when(Mimosa.call == TRUE ~ "1", .default = "0")) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  filter(VISITMONTH == "M0") %>%
+  filter(!(antigen %in% c("Any Wuhan", "Any BA.4/5"))) %>%
+  filter(!(antigen %in% c("COV2 CON S1", "COV2 CON S2", "BA.4-5 S1", "BA.4-5 S2"))) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike Wuhan", replacement = "Spike Ancestral")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Spike BA.4/5", replacement = "Spike BA4/5")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan E Wuhan M", replacement = "Ancestral E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "Wuhan N", replacement = "Ancestral N")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.1-2-4-5 E / BA.1-2-4-5 M", replacement = "BA4/5 E/M")) %>%
+  mutate(antigen = str_replace_all(string = antigen, pattern = "BA.4-5 N", replacement = "BA4/5 N")) %>%
+  filter(antigen %in% c("Spike Ancestral", "Ancestral E/M", "Ancestral N")) %>%
+  mutate(antigen = paste(antigen, RX_CODE)) %>%
+  mutate(antigen = factor(x = antigen, 
+                          levels = c("Spike Ancestral AG1", "Ancestral N AG1", "Ancestral E/M AG1",
+                                     "Spike Ancestral AG3", "Ancestral N AG3", "Ancestral E/M AG3", 
+                                     "Spike Ancestral AG2-1", "Ancestral N AG2-1", "Ancestral E/M AG2-1", 
+                                     "Spike Ancestral AG2-2", "Ancestral N AG2-2", "Ancestral E/M AG2-2", 
+                                     "Spike Ancestral AG4-1", "Ancestral N AG4-1", "Ancestral E/M AG4-1", 
+                                     "Spike Ancestral AG4-2", "Ancestral N AG4-2", "Ancestral E/M AG4-2"))) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white")) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & response == "1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & response == "1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" & response == "1" ~ "#33A02C",
+                              RX_CODE %in% "AG3" & response == "1" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & response == "1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" & response == "1" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & response == "0" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & response == "0" ~ "#B2DF8A",
+                               RX_CODE %in% "AG2-2" & response == "0" ~ "#33A02C",
+                               RX_CODE %in% "AG3" & response == "0" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & response == "0" ~ "#FDBF6F",
+                               RX_CODE %in% "AG4-2" & response == "0" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(RX_CODE = factor(x = RX_CODE, levels = c("AG1", "AG3", "AG2-1", "AG2-2", "AG4-1", "AG4-2"))) %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+"))) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj < 0.01 ~ 0.01, .default = pctpos_adj))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(antigen = antigen %>% as.character()) %>%
+  mutate(response = factor(x = response, levels = c("0", "1"))) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH, response, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH) %>%
+  mutate(N = sum(n)) %>%
+  mutate(value = round(x = n / N * 100, digits = 0)) %>%
+  mutate(text = paste0(value, "%")) %>%
+  mutate(text_2 = paste0(n, "/", N)) %>%
+  filter(response == "1") %>%
+  mutate(RX_CODE_FACET = case_when(RX_CODE == "AG1" ~ "PLWH, SARS2-", 
+                                   RX_CODE == "AG2-1" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG2-2" ~ "PLWH, SARS2+", 
+                                   RX_CODE == "AG3" ~ "PWoH, SARS2-", 
+                                   RX_CODE == "AG4-1" ~ "PWoH, SARS2+", 
+                                   RX_CODE == "AG4-2" ~ "PWoH, SARS2+")) %>%
+  mutate(RX_CODE_FACET = factor(x = RX_CODE_FACET, levels = c("PLWH, SARS2-", 
+                                                              "PWoH, SARS2-",
+                                                              "PLWH, SARS2+",
+                                                              "PWoH, SARS2+")))
+
+#- Fig.
+cairo_pdf(file = "Suppl_Fig_1B.pdf", 
+    width = 12, 
+    height = 4.7, 
+    pointsize = 12, 
+    onefile = TRUE)
+jitter_pos <- position_jitter(width = 0.25, seed = 123)
+dt.ggplot %>%
+  filter(tcellsub == "8+") %>%
+  arrange(RX_CODE_FACET, pubid, antigen) %>%
+  ggplot(aes(x = antigen, y = pctpos_adj)) +
+    geom_line(aes(group = pubid),
+              color = "grey80", alpha = .25, position = jitter_pos) +
+    geom_point(aes(fill = FILL_PCH, color = COLOR_PCH, group = FILL_BX),
+              size = 2, alpha = 1, pch = 21, position = jitter_pos) +
+    geom_boxplot(aes(fill = FILL_BX), 
+                 width = .75, alpha = .5, outlier.shape = NA,
+                 data = dt.ggplot %>%
+                   filter(tcellsub == "8+") %>%
+                   filter(response %in% c(1, 0))) +
+    geom_text(aes(x = antigen, y = 8, label = text), 
+              size = 4.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "8+")) +
+    geom_text(aes(x = antigen, y = 5.5, label = text_2), 
+              color = "grey40", size = 3.25,
+              data = dt.ggplot.text %>% 
+                filter(tcellsub == "8+")) +
+    geom_vline(aes(xintercept = 3.5), 
+               color = "grey60", lty = 2, linewidth = .25,
+               data = dt.ggplot %>% 
+                 filter(tcellsub == "8+") %>% 
+                 filter(RX_CODE_FACET %in% c("PLWH, SARS2+", "PWoH, SARS2+"))) +
+    facet_grid(~ RX_CODE_FACET, scales = "free_x", space = "free_x") +
+    scale_x_discrete(labels = c("Ancestral Spike", "Ancestral N", "Ancestral E/M",
+                                "Ancestral Spike", "Ancestral N", "Ancestral E/M")) +
+    scale_y_continuous(trans = "log10", 
+                       breaks = c(0.01, 0.1, 1, 10), 
+                       labels = c("\u22640.01", "0.1", "1", "10"), 
+                       limits = c(0.009, 8)) +
+    scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                 "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                 "white" = "white")) +
+    scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", "#B2DF8A" = "#B2DF8A", "#33A02C" = "#33A02C", 
+                                  "#FB9A99" = "#FB9A99", "#FDBF6F" = "#FDBF6F", "#FF7F00" = "#FF7F00",
+                                  "white" = "white")) +
+    labs(x = NULL, y = "% of CD8+ T cells expressing IFN-\u03B3 and/or IL-2\nBackground-subtracted") +
+    theme_classic() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 13),
+          strip.text = element_text(size = 16),
+          legend.position = "none") -> plot
+plot
+dev.off()
+```
+
+## - Fig. 3A & Suppl. Fig. 2A-B
+_______________________________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt %>%
+  mutate(response = case_when(Mimosa.call == TRUE ~ "1", .default = "0")) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & response == "1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & response == "1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" & response == "1" ~ "#33A02C",
+                              RX_CODE %in% "AG3" & response == "1" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & response == "1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" & response == "1" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & response == "0" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & response == "0" ~ "#B2DF8A",
+                               RX_CODE %in% "AG2-2" & response == "0" ~ "#33A02C",
+                               RX_CODE %in% "AG3" & response == "0" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & response == "0" ~ "#FDBF6F",
+                               RX_CODE %in% "AG4-2" & response == "0" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG2-2" ~ "#33A02C",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white"))
+dt.ggplot <- dt.ggplot %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+"))) %>%
+  mutate(antigen = case_when(antigen == "Any Wuhan" ~ "Any Ancestral",
+                             antigen == "Spike Wuhan" ~ "Spike Ancestral",
+                             antigen == "Any BA.4/5" ~ "Any BA4/5",
+                             antigen == "Spike BA.4/5" ~ "Spike BA4/5",
+                             antigen == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                             antigen == "Wuhan N" ~ "Ancestral N",
+                             antigen == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                             antigen == "BA.4-5 N" ~ "BA4/5 N",
+                             .default = antigen)) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj < 0.01 ~ 0.01, .default = pctpos_adj))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(response = factor(x = response, levels = c("0", "1"))) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH, response, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH) %>%
+  mutate(N = sum(n)) %>%
+  mutate(value = round(x = n / N * 100, digits = 0)) %>%
+  mutate(text = paste0(value, "%")) %>%
+  mutate(text_2 = paste0(n, "/", N)) %>%
+  filter(response == "1") %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+")))
+
+#- Fig.
+cairo_pdf(file = "Fig_3A.pdf", 
+    width = 15, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in c("Any Ancestral", 
+           "Any BA4/5", 
+           "Spike Ancestral", 
+           "Spike BA4/5", 
+           "COV2 CON S1", 
+           "COV2 CON S2", 
+           "Ancestral N", 
+           "Ancestral E/M", 
+           "BA.4-5 S1", 
+           "BA.4-5 S2", 
+           "BA4/5 E/M", 
+           "BA4/5 N")) {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(tcellsub == "4+") %>%
+    filter(antigen == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", 
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  dt.ggplot.text.tmp <- dt.ggplot.text %>%
+    filter(tcellsub == "4+") %>%
+    filter(antigen == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations",
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(pubid) %>%
+    ggplot() +
+      geom_point(aes(x = X, y = pctpos_adj, fill = FILL_PCH, color = COLOR_PCH, group = pubid), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = 3, alpha = .7, pch = 21) +
+      geom_line(aes(x = X, y = pctpos_adj, color = COLOR_LINE, group = pubid), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = .2, alpha = .7) +
+      geom_boxplot(aes(x = X, y = pctpos_adj, fill = FILL_BX),
+                   alpha = .75, width = .5, outlier.shape = NA, 
+                   data = dt.ggplot.tmp %>% 
+                     filter(response %in% c(1, 0))) +
+      geom_text(aes(x = X, y = 8, label = text), 
+                size = 4.25,
+                data = dt.ggplot.text.tmp) +
+      geom_text(aes(x = X, y = 6, label = text_2), 
+                color = "grey40", size = 3.25,
+                data = dt.ggplot.text.tmp) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV+, SARS-CoV-2+")) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV-, SARS-CoV-2+")) +
+      facet_grid(~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations",
+                                  "Baseline_3", "Post two\nvaccinations_3", 
+                                  "Baseline_2", "Post one\nvaccination_2"),
+                       labels = c("Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post one\nvaccination")) +
+      scale_y_continuous(trans = "log10", 
+                         breaks = c(0.01, 0.1, 1, 10), 
+                         labels = c("\u22640.01", "0.1", "1", "10"), 
+                         limits = c(0.009, 8)) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#33A02C" = "#33A02C",
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "#FF7F00" = "#FF7F00", 
+                                   "white" = "white")) +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#33A02C" = "#33A02C", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "#FF7F00" = "#FF7F00", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "% of CD4+ T cells expressing IFN-\u03B3 and/or IL-2\nBackground-subtracted", 
+           fill = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 12),
+            axis.title = element_text(size = 14),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.position = "none") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+
+## - Fig. 3B & Suppl. Fig. 2C-D
+_______________________________
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+#- dt.ggplot
+dt.ggplot <- dt %>%
+  mutate(response = case_when(Mimosa.call == TRUE ~ "1", .default = "0")) %>%
+  mutate(RX_CODE = plyr::mapvalues(x = RX_CODE, 
+                                   from = c("Group 1", "Group 2-I", "Group 2-II", "Group 3", "Group 4-I", "Group 4-II"), 
+                                   to = c("AG1", "AG2-1", "AG2-2", "AG3", "AG4-1", "AG4-2"))) %>%
+  mutate(FILL_PCH = case_when(RX_CODE %in% "AG1" & response == "1" ~ "#A6CEE3",
+                              RX_CODE %in% "AG2-1" & response == "1" ~ "#B2DF8A",
+                              RX_CODE %in% "AG2-2" & response == "1" ~ "#33A02C",
+                              RX_CODE %in% "AG3" & response == "1" ~ "#FB9A99",
+                              RX_CODE %in% "AG4-1" & response == "1" ~ "#FDBF6F",
+                              RX_CODE %in% "AG4-2" & response == "1" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_PCH = case_when(RX_CODE %in% "AG1" & response == "0" ~ "#A6CEE3",
+                               RX_CODE %in% "AG2-1" & response == "0" ~ "#B2DF8A",
+                               RX_CODE %in% "AG2-2" & response == "0" ~ "#33A02C",
+                               RX_CODE %in% "AG3" & response == "0" ~ "#FB9A99",
+                               RX_CODE %in% "AG4-1" & response == "0" ~ "#FDBF6F",
+                               RX_CODE %in% "AG4-2" & response == "0" ~ "#FF7F00",
+                              .default = "white")) %>%
+  mutate(COLOR_LINE = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                                RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                                RX_CODE %in% "AG2-2" ~ "#33A02C",
+                                RX_CODE %in% "AG3" ~ "#FB9A99",
+                                RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                                RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                                .default = "white")) %>%
+  mutate(FILL_BX = case_when(RX_CODE %in% "AG1" ~ "#A6CEE3",
+                             RX_CODE %in% "AG2-1" ~ "#B2DF8A",
+                             RX_CODE %in% "AG2-2" ~ "#33A02C",
+                             RX_CODE %in% "AG3" ~ "#FB9A99",
+                             RX_CODE %in% "AG4-1" ~ "#FDBF6F",
+                             RX_CODE %in% "AG4-2" ~ "#FF7F00",
+                             .default = "white"))
+dt.ggplot <- dt.ggplot %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+"))) %>%
+  mutate(antigen = case_when(antigen == "Any Wuhan" ~ "Any Ancestral",
+                             antigen == "Spike Wuhan" ~ "Spike Ancestral",
+                             antigen == "Any BA.4/5" ~ "Any BA4/5",
+                             antigen == "Spike BA.4/5" ~ "Spike BA4/5",
+                             antigen == "Wuhan E Wuhan M" ~ "Ancestral E/M",
+                             antigen == "Wuhan N" ~ "Ancestral N",
+                             antigen == "BA.1-2-4-5 E / BA.1-2-4-5 M" ~ "BA4/5 E/M",
+                             antigen == "BA.4-5 N" ~ "BA4/5 N",
+                             .default = antigen)) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj < 0.01 ~ 0.01, .default = pctpos_adj))
+
+#- dt.ggplot.text (% of positive responses)
+dt.ggplot.text <- dt.ggplot %>%
+  mutate(response = factor(x = response, levels = c("0", "1"))) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH, response, .drop = FALSE) %>%
+  summarize(n = n()) %>%
+  group_by(tcellsub, RX_CODE, antigen, VISITMONTH) %>%
+  mutate(N = sum(n)) %>%
+  mutate(value = round(x = n / N * 100, digits = 0)) %>%
+  mutate(text = paste0(value, "%")) %>%
+  mutate(text_2 = paste0(n, "/", N)) %>%
+  filter(response == "1") %>%
+  mutate(FACET_X = case_when(RX_CODE == "AG1" ~ "HIV+, SARS-CoV-2-", 
+                             RX_CODE == "AG2-1" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG2-2" ~ "HIV+, SARS-CoV-2+", 
+                             RX_CODE == "AG3" ~ "HIV-, SARS-CoV-2-", 
+                             RX_CODE == "AG4-1" ~ "HIV-, SARS-CoV-2+", 
+                             RX_CODE == "AG4-2" ~ "HIV-, SARS-CoV-2+")) %>%
+  mutate(FACET_X = factor(x = FACET_X, levels = c("HIV+, SARS-CoV-2-", 
+                                                  "HIV-, SARS-CoV-2-",
+                                                  "HIV+, SARS-CoV-2+",
+                                                  "HIV-, SARS-CoV-2+")))
+
+#- Fig.
+cairo_pdf(file = "Fig_3B.pdf", 
+    width = 15, 
+    height = 4.5, 
+    pointsize = 12, 
+    onefile = TRUE)
+for(i in c("Any Ancestral", 
+           "Any BA4/5", 
+           "Spike Ancestral", 
+           "Spike BA4/5", 
+           "COV2 CON S1", 
+           "COV2 CON S2", 
+           "Ancestral N", 
+           "Ancestral E/M", 
+           "BA.4-5 S1", 
+           "BA.4-5 S2", 
+           "BA4/5 E/M", 
+           "BA4/5 N")) {
+  # Data
+  dt.ggplot.tmp <- dt.ggplot %>%
+    filter(tcellsub == "8+") %>%
+    filter(antigen == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations", 
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  dt.ggplot.text.tmp <- dt.ggplot.text %>%
+    filter(tcellsub == "8+") %>%
+    filter(antigen == i) %>%
+    mutate(X = case_when(VISITMONTH == "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Baseline",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG1", "AG3") ~ "Post two\nvaccinations",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Baseline_2",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-1", "AG2-1") ~ "Post one\nvaccination_2",
+                         VISITMONTH == "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Baseline_3",
+                         VISITMONTH != "M0" & RX_CODE %in% c("AG4-2", "AG2-2") ~ "Post two\nvaccinations_3",
+                         .default = "Post two\nvaccinations")) %>%
+    mutate(X = factor(x = X, levels = c("Baseline", "Post two\nvaccinations",
+                                        "Baseline_2", "Post one\nvaccination_2",
+                                        "Baseline_3", "Post two\nvaccinations_3")))
+  # Figure  
+  dt.ggplot.tmp %>%
+    arrange(pubid) %>%
+    ggplot() +
+      geom_point(aes(x = X, y = pctpos_adj, fill = FILL_PCH, color = COLOR_PCH, group = pubid), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = 3, alpha = .7, pch = 21) +
+      geom_line(aes(x = X, y = pctpos_adj, color = COLOR_LINE, group = pubid), 
+                 position = position_jitterdodge(jitter.width = .05, dodge.width = .4, seed = 123),
+                 size = .2, alpha = .7) +
+      geom_boxplot(aes(x = X, y = pctpos_adj, fill = FILL_BX),
+                   alpha = .75, width = .5, outlier.shape = NA, 
+                   data = dt.ggplot.tmp %>% 
+                     filter(response %in% c(1, 0))) +
+      geom_text(aes(x = X, y = 8, label = text), 
+                size = 4.25,
+                data = dt.ggplot.text.tmp) +
+      geom_text(aes(x = X, y = 6, label = text_2), 
+                color = "grey40", size = 3.25,
+                data = dt.ggplot.text.tmp) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV+, SARS-CoV-2+")) +
+      geom_vline(aes(xintercept = 2.5),
+                 color = "grey60", lty = 2, linewidth = .5,
+                 data = dt.ggplot.tmp %>% filter(FACET_X == "HIV-, SARS-CoV-2+")) +
+      facet_grid(~ FACET_X, scales = "free_x", space = "free_x") +
+      scale_x_discrete(breaks = c("Baseline", "Post two\nvaccinations",
+                                  "Baseline_3", "Post two\nvaccinations_3", 
+                                  "Baseline_2", "Post one\nvaccination_2"),
+                       labels = c("Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post two\nvaccinations", 
+                                  "Baseline", "Post one\nvaccination")) +
+      scale_y_continuous(trans = "log10", 
+                         breaks = c(0.01, 0.1, 1, 10), 
+                         labels = c("\u22640.01", "0.1", "1", "10"), 
+                         limits = c(0.009, 8)) +
+      scale_fill_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                   "#B2DF8A" = "#B2DF8A", 
+                                   "#33A02C" = "#33A02C",
+                                   "#FB9A99" = "#FB9A99", 
+                                   "#FDBF6F" = "#FDBF6F", 
+                                   "#FF7F00" = "#FF7F00", 
+                                   "white" = "white")) +
+      scale_color_manual(values = c("#A6CEE3" = "#A6CEE3", 
+                                    "#B2DF8A" = "#B2DF8A", 
+                                    "#33A02C" = "#33A02C", 
+                                    "#FB9A99" = "#FB9A99", 
+                                    "#FDBF6F" = "#FDBF6F", 
+                                    "#FF7F00" = "#FF7F00", 
+                                    "white" = "white"), guide = "none") +
+      labs(x = NULL, 
+           y = "% of CD8+ T cells expressing IFN-\u03B3 and/or IL-2\nBackground-subtracted", 
+           fill = NULL,
+           title = i) +
+      theme_classic() +
+      theme(axis.text = element_text(size = 12),
+            axis.title = element_text(size = 14),
+            strip.text = element_text(size = 16),
+            title = element_text(size = 16),
+            legend.position = "none") -> plot
+  plot %>% print()
+} 
+dev.off()
+```
+
