@@ -20,3 +20,14 @@ The RMD file CD8_cluster_marker_SuppTbl5_and6.Rmd reproduces the following resul
 
 The RMD file ICS_ControlledRisk_NP_SuppFig14.Rmd reproduces the following results:
   Controlled risk curves in the Supplemental Figure 14 of the supplement.
+
+The RMD file ICS_IFN-g_and-or_IL-2_Fig_2-3.Rmd reproduces the following results:
+  % of T cells expressing IFN-g and/or IL-2 in Figures 2, 3 and Supplemental Figures 2, 3 of the main article.
+
+The RMD file ICS_CC_EDA-COMPASS_CD4+T.Rmd reproduces all figures related to COMPASS in the case/non-case cohort.
+
+The RMD file IICS_EDA-COMPASS.Rmd reproduces the following results:  
+   COMPASS scores in Figure 3 and Supplemental Figure 3 of the main article.
+
+The RMD file ICS_High-Dimensional-ICS-Analysis_CD4+T.Rmd reproduces all figures related to the clustering.
+
