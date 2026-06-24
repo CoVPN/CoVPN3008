@@ -9,6 +9,9 @@ The RMD file coxph_Fig5.Rmd reproduces the following results:
 The RMD file ICS_ControlledRisk_NP_Fig4.Rmd reproduces the following results:
   Controlled risk curves in the Figure 4 of the main article.
 
+The RMD file ICS_threshold_analysis_Fig4.Rmd reproduces the following results:
+  Nonparametric thresholded analysis curves in the Figure 4 of the main article.
+
 The RMD file Plot_two_markers_case_noncase_Fig5.Rmd reproduces the following results:
   The bivariate marker plot in the Figure 5 of the main article.
 
