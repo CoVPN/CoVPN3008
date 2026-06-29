@@ -87,10 +87,13 @@ CoR_D1 <- function(dt, density,
 }
 
 
+##########################################################################
+# Below are some functions that help plot the curves
+                       
 # Helper function that plots both Cox-based and NP-based CoR curves
 # ests_cox and ests_np are returned objects from 
 # the vaccine package.
-# mk_dist is ph2 marker measurements with weights
+# mk_dist is ph2 marker measurements with sampling weights
 
 plot_cr <- function(ests_cox, ests_np, mk_dist,
                      xlab_name = 'log10 CD4+ IFNg OR IL-2 (%)',
