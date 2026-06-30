@@ -1,5 +1,9 @@
 This folder hosts RMD files necessary to reproduce the ICS and antibody correlates analysis in CoVPN 3008 Study.
 
+The RMD files listed below are ready to use with a single click, provided that the processed dataset is placed in the same directory. 
+To access the processed dataset, permission will have to be requested from HVTN and Statistical Center for HIV/AIDS Research & Prevention (SCHARP).
+
+
 The RMD file coxph_Fig4.Rmd reproduces the following results:
   Univaraite Cox regression results in Figure 4 of the main article.
 
