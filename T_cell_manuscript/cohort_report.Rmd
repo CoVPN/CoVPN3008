@@ -1,0 +1,2467 @@
+---
+from: Jiani Hu
+to: CoVPN 3008 Leadership
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+re:CoVPN 3008 Demographics table of Per-protocol Serum Immunogenicity Analysis Set participants
+output:
+  pdf_document:
+    template: template_nopgnum.tex
+    latex_engine: xelatex
+  word_document:
+    reference_docx: ../office_templates/word-pt-styles-reference-02.docx
+  html_document:
+    default
+urlcolor: blue
+bibliography: bibliography.bib
+---
+
+<!---
+Modification log 
+----------------
+11/18/2024   Jiani Hu - initial (copied from HVTN 405 msd_igg)
+--->
+
+
+
+```{r knitr, echo = FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(knitr)
+  library(kableExtra)
+  library(hvtnReports)
+  library(dplyr)
+  library(tidyr) # for gather/spread
+  library(ggplot2)
+  library(broom) # for test.chisq tidying in chunk comparisons
+  library(VISCfunctions) # for comparison functions
+  library(haven) 
+  library(rtf)
+  library(stringr)
+#  library(qdapRegex)
+  library(gtsummary)
+  library(conflicted)
+  library(purrr)
+})
+
+fig_dev <- c("pdf", "png") # Create both pdf and png versions of each figure
+
+# Determine output document type.
+doctype <- opts_knit$get('rmarkdown.pandoc.to')
+opts_chunk$set(echo = doctype == "html", message = doctype == "html",
+               error = doctype == "html", warning = doctype == "html",
+               # fig.width & fig.height control output file dimension
+               # out.width & out.height control size in document
+               fig.width = 10, fig.height = 7.5,
+               out.width = "10in", out.height = "7.5in",
+               dev = fig_dev, fig.path="../graph/cohort/")
+
+# kable options - replace NA with 0
+opts <- options(knitr.kable.NA = "0")
+
+conflicts_prefer(dplyr::filter)
+
+```
+
+<!---setup table header name and footer parameter--->
+
+```{r params, eval = doctype != "docx"}
+   
+tlf <- 
+  list( 
+  
+    cohort_t = 
+    c(table_name = "Cohort overall",
+      table_header = "Participant characteristics by enrollment group, all countries",
+      table_footer = "Any unknown, undefined, or missing values are due to incomplete live CRF data. Any levels not yet observed are not shown.")
+    
+  )
+
+
+```
+
+<!---setup table parameter--->
+
+```{r param_setup, eval = doctype != "docx"}
+
+### Protocol-specific parameters ---
+
+
+# Do the same for the header
+#header <- paste(header, collapse = "\\\\")
+
+# Set table and figure numbers.
+# Set the maximum number of rows to print, keeps tables from running off page.
+tbl_num <- 1
+fig_num <- 1
+tbl.font <- 10
+
+### Assay-specific parameters ---
+subjid_var <- "ptid"
+
+
+
+
+```
+
+<!---load dataset--->
+
+```{r dataio, eval = doctype != "docx"}
+
+ds <- read.csv("../adata/COVID_realdata_ics_bama_nab_bcp20241210_processed_with_riskscore.csv") %>%
+  mutate( VACCINE_f = case_when(AGRP2N == 2.1 | AGRP2N == 4.1 ~ "Hybrid",
+                                   AGRP2N == 1 | AGRP2N == 3 | AGRP2N == 2.2 | AGRP2N == 4.2 ~ "Vaccine")) %>%
+  select(-HIVVLBL2, -CD4BL2 ) # use the HIV and CD4count directly from verified ADSL
+
+adsl <- read.csv("/trials/covpn/p3008/analysis/verification/adata/preM6/21APR2023/ADSL.csv")
+
+
+table_dat <- adsl %>%
+  mutate(AGRP2N = as.numeric(AGRP2N)) %>%
+  # filter(FASFL=="Y", !is.na(AGRP2N)) %>%
+  mutate(AGRP2N_f = case_when(AGRP2N==1 ~ "AG1",
+                              AGRP2N==2.1 ~ "AG2-1",
+                              AGRP2N==2.2 ~ "AG2-2",
+                              AGRP2N==3 ~ "AG3",
+                              AGRP2N==4.1 ~ "AG4-1",
+                              AGRP2N==4.2 ~ "AG4-2"), 
+         AGRP2N_f = factor(AGRP2N_f, levels=c("AG1","AG2-2","AG2-1","AG3","AG4-2","AG4-1")), 
+         PCRBL_f = ifelse(PCRBL=="", "Missing", PCRBL),
+         PCRBL_f = factor(PCRBL_f, levels=c("Negative", "Positive", "Missing")),
+         CTRBL_f = ifelse(CTRBL=="", "Missing", CTRBL),
+         CTRBL_f = factor(CTRBL_f, levels=c("Negative", "Positive", "Missing")),
+         SEX_f = factor(SEX, levels=c("Male", "Female")),
+         AGEGR1_f = paste(AGEGR1, "years"),
+         AGEGR1_f = factor(AGEGR1_f, levels=c("<=40 years", ">40 years")),
+         # receive vaccine doses as assigned in pre-Month 6 stage
+         CORRECTD=if_else(TRT01P==TRT01A & TRT02P==TRT02A, "Yes", "No"),
+         CORRECTD=factor(CORRECTD, levels=c("Yes", "No")),
+         # categorization
+         CD4BL_f = case_when(is.na(CD4BL) ~ "Missing",
+                             CD4BL<200 ~ "<200",
+                             CD4BL>=200 & CD4BL<350 ~ "200 - <350",
+                             CD4BL>=350 & CD4BL<500 ~ "350 - <500",
+                             CD4BL>=500 ~ ">=500"),
+         CD4BL_f = factor(CD4BL_f, levels=c("<200", "200 - <350", "350 - <500", ">=500", "Missing")),
+         HIVVLBL_f = case_when(is.na(HIVVLBL) & HIVDETBL=="" ~ "Missing",
+                               HIVVLBL<50 | HIVDETBL=="Not detected" ~ "<50", # either viral load < 50 or not detected
+                               HIVVLBL>=50 ~ ">=50"),
+         HIVVLBL_f = factor(HIVVLBL_f, levels=c("<50", ">=50", "Missing")),
+         ARTBLFL_f = case_when(ARTBLFL=="Y" ~ "On ART",
+                             ARTBLFL=="N" ~ "Not on ART",
+                             ARTBLFL=="" ~ "Missing"),
+         ARTBLFL_f = factor(ARTBLFL_f, levels=c("On ART", "Not on ART", "Missing")),
+         TB_active = case_when(TBFL=="Y" & TBTYP=="Active" ~ "Yes",
+                               TBFL=="Y" & TBTYP=="Previous" ~ "No",
+                               TBFL=="N" ~ "No",
+                               TBFL=="" ~ "Missing"),
+         TB_active = factor(TB_active, levels=c("Yes", "No", "Missing")),
+         TB_previous = case_when(TBFL=="Y" & TBTYP=="Previous" ~ "Yes",
+                                 TBFL=="Y" & TBTYP=="Active" ~ "No",
+                                 TBFL=="N" ~ "No",
+                                 TBFL=="" ~ "Missing"),
+         TB_previous = factor(TB_previous, levels=c("Yes", "No", "Missing")),
+         Subjectid = USUBJID )
+
+
+ ds <- ds %>% full_join(., table_dat)
+
+
+```
+
+
+
+
+# Results
+\clearpage
+
+\blandscape <!-- This creates a landscaped page. \elandscape must follow somewhere -->
+\tlf
+
+```{cohort_tbl_seru, eval = doctype != "docx"}
+
+
+ ds.seru <- ds %>%
+  filter(ph2.m1.sera == 1 & IMMFL == "Y") 
+
+
+# create table 1 with gtsummary package for study groups 1-4 categories
+gtsummary_table_dat_grp1to4 <- ds.seru %>%
+  select(VACCINE_f, CORRECTD, PCRBL_f, CTRBL_f, CTRYNAME, SEX_f, RACE,AGE, AGEGR1_f, TB_active, TB_previous) %>%
+  tbl_summary(by=VACCINE_f,
+              missing_text = "(Missing)",
+              statistic = list("AGE" ~ "{median} ({min}, {max})"),
+              digits = list(all_continuous() ~ c(1,1,1), # digits for continuous variables: mean, min, max
+                            all_categorical() ~ c(0,1)), # digits for categorical variables
+              label = list(CORRECTD ~ "Received vaccine doses as assigned",
+                           PCRBL_f ~ "SARS-CoV-2 NAAT result - N (%)",
+                           CTRBL_f ~ "Central lab anti-N test result - N (%)",
+                           CTRYNAME ~"Country",
+                           SEX_f ~ "Sex assigned at birth - N (%)",
+                           RACE ~ "Race - N (%)",
+                           AGE ~ "Median age (range) - years",
+                           AGEGR1_f ~ "Age category - N (%)",
+                           TB_active = "Active tuberculosis",
+                           TB_previous = "History of tuberculosis")) %>%
+  add_overall(last = TRUE) %>% # logical indicator to display overall column last in table
+  as_tibble()
+
+# create table 1 with gtsummary package for study groups 1-2 categories
+gtsummary_table_dat_grp1to2 <- ds.seru %>%
+ # filter(STRATARN %in% c(1,2)) %>% 
+  select(VACCINE_f, CD4BL_f, CD4BL, HIVVLBL_f, HIVVLBL, ARTBLFL_f) %>%
+  tbl_summary(by=VACCINE_f,
+              missing_text = "(Missing)",
+              statistic = list(c("CD4BL", "HIVVLBL") ~ "{median} ({p25}, {p75})"),
+              digits = list(all_continuous() ~ c(1,1,1), # digits for continuous variables: median, p25, p75
+                            all_categorical() ~ c(0,1)), # digits for categorical variables
+              label = list(CD4BL ~ "Median CD4 count** (IQR) - cells/mm3",
+                           CD4BL_f ~ "CD4 count** (cells/mm3) - N (%)",
+                           HIVVLBL ~ "Median HIV-1 viral load** (IQR) - copies/mL",
+                           HIVVLBL_f ~ "HIV viral load** (copies/mL) - N (%)",
+                           ARTBLFL_f = "ART status**")) %>%
+  add_overall(last = TRUE) %>% # logical indicator to display overall column last in table
+  as_tibble()
+
+# combine all table 1 categories
+gtsummary_table_dat <- bind_rows(gtsummary_table_dat_grp1to4,
+                                 gtsummary_table_dat_grp1to2) 
+
+# kable table for output in PDF
+kable_table_dat <- gtsummary_table_dat %>%
+  # mutate_at(c("**Hybrid**, N = 138",  "**Vaccine**, N = 61",  "**Overall**, N = 199"), list(~ ifelse(row_number() %in% c(26:30, 31:32, 34:36, 37:38, 40:42), "-", .))) %>%
+  # remove "(Missing)" row for continuous variables
+  filter(`**Characteristic**`!="(Missing)") %>%
+  mutate_all(list(~ gsub('%', '%', ., fixed=TRUE))) %>%
+  mutate_all(list(~ replace_na(., "")))
+names(kable_table_dat) <- gsub("Overall", "Total", gsub("\\*", "", names(kable_table_dat))) 
+
+# add info rows
+# info_row1 <- c("Point-of-care anti-Spike test result","Neg","Neg","Pos","Neg","Neg","Pos","")
+# info_row2 <- c("Number of primary series vaccine doses assigned","2","2","1","2","2","1", "")
+# info_row3 <- c("Overall SARS-CoV-2 status*","Neg","Pos","Pos","Neg","Pos","Pos","")
+# kable_table_dat_all <- rbind(info_row1,
+#                              info_row2,
+#                              kable_table_dat[1:9,],
+#                              info_row3,
+#                              kable_table_dat[10:nrow(kable_table_dat),]) 
+
+# output table
+kable_table_dat %>% 
+  kable(caption = "", 
+      col.names = linebreak(names(kable_table_dat)),
+      row.names = FALSE,
+      booktabs = TRUE,
+      linesep = "",
+      longtable = TRUE,
+      escape = FALSE,
+      align = "l") %>%
+  add_indent(positions = which(!(kable_table_dat$Characteristic %in% c(    "Received vaccine doses as assigned",
+                                                                           "SARS-CoV-2 NAAT result - N (%)",
+                                                                           "Central lab anti-N test result - N (%)",
+                                                                           "Country",
+                                                                           "Sex assigned at birth - N (%)",
+                                                                           "Race - N (%)",
+                                                                           "Median age (range) - years",
+                                                                           "Age category - N (%)",
+                                                                           "Active tuberculosis",
+                                                                           "History of tuberculosis",
+                                                                           "CD4 count** (cells/mm3) - N (%)",
+                                                                           "Median CD4 count** (IQR) - cells/mm3",
+                                                                           "HIV viral load** (copies/mL) - N (%)",
+                                                                           "Median HIV-1 viral load** (IQR) - copies/mL",
+                                                                           "ART status**")))) %>%
+  kable_styling(latex_options = "repeat_header") %>%
+  column_spec(1, width = "6.3cm") %>%
+  column_spec(2:4, width = "2.2cm") %>%
+  footnote(general_title = "",
+            general = c(""),
+           threeparttable=TRUE) %>%
+  landscape
+
+
+ ## report table in RTF format
+rtf.w <- 11
+ rtf.h <- 8.5
+ rtf.fs <- 11
+ rtf.mar <- c(1,1,1,1)
+ rtf.na <- '0' 
+ out.rtf <- "../report/cohort_table_Serum.doc"
+ rtf <- RTF(out.rtf, 
+            width = rtf.w, height = rtf.h, 
+            font.size = rtf.fs, omi = rtf.mar)
+ tbl_lab <- paste0("Table 1. Demographics of Per-protocol Serum Immunogenicity Analysis Set participants in the Hybrid Group, Vaccine Group, and Overall. ")
+ 
+ rtf.tbl <- kable_table_dat 
+ 
+  addHeader(rtf, tbl_lab,
+          font.size = 12)
+addTable(rtf, rtf.tbl,col.justify = c("L","L","C","C"))
+addPageBreak(rtf, 
+             width = rtf.w, height = rtf.h, 
+             font.size = rtf.fs, omi = rtf.mar)
+rtf::done(rtf)
+
+
+
+```
+
+
+
+```{cohort_tbl_ics, eval = doctype != "docx"}
+
+ ds.ics <- ds %>%
+  filter(ph2.m1.ics.cohort == 1 & IMMFL == "Y") 
+
+
+# create table 1 with gtsummary package for study groups 1-4 categories
+gtsummary_table_dat_grp1to4 <- ds.ics %>%
+  select(VACCINE_f, CORRECTD, PCRBL_f, CTRBL_f, CTRYNAME, SEX_f, RACE,AGE, AGEGR1_f, TB_active, TB_previous) %>%
+  tbl_summary(by=VACCINE_f,
+              missing_text = "(Missing)",
+              statistic = list("AGE" ~ "{median} ({min}, {max})"),
+              digits = list(all_continuous() ~ c(1,1,1), # digits for continuous variables: mean, min, max
+                            all_categorical() ~ c(0,1)), # digits for categorical variables
+              label = list(CORRECTD ~ "Received vaccine doses as assigned",
+                           PCRBL_f ~ "SARS-CoV-2 NAAT result - N (%)",
+                           CTRBL_f ~ "Central lab anti-N test result - N (%)",
+                           CTRYNAME ~"Country",
+                           SEX_f ~ "Sex assigned at birth - N (%)",
+                           RACE ~ "Race - N (%)",
+                           AGE ~ "Median age (range) - years",
+                           AGEGR1_f ~ "Age category - N (%)",
+                           TB_active = "Active tuberculosis",
+                           TB_previous = "History of tuberculosis")) %>%
+  add_overall(last = TRUE) %>% # logical indicator to display overall column last in table
+  as_tibble()
+
+# create table 1 with gtsummary package for study groups 1-2 categories
+gtsummary_table_dat_grp1to2 <- ds.ics %>%
+ # filter(STRATARN %in% c(1,2)) %>% 
+  select(VACCINE_f, CD4BL_f, CD4BL, HIVVLBL_f, HIVVLBL, ARTBLFL_f) %>%
+  tbl_summary(by=VACCINE_f,
+              missing_text = "(Missing)",
+              statistic = list(c("CD4BL", "HIVVLBL") ~ "{median} ({p25}, {p75})"),
+              digits = list(all_continuous() ~ c(1,1,1), # digits for continuous variables: median, p25, p75
+                            all_categorical() ~ c(0,1)), # digits for categorical variables
+              label = list(CD4BL ~ "Median CD4 count** (IQR) - cells/mm3",
+                           CD4BL_f ~ "CD4 count** (cells/mm3) - N (%)",
+                           HIVVLBL ~ "Median HIV-1 viral load** (IQR) - copies/mL",
+                           HIVVLBL_f ~ "HIV viral load** (copies/mL) - N (%)",
+                           ARTBLFL_f = "ART status**")) %>%
+  add_overall(last = TRUE) %>% # logical indicator to display overall column last in table
+  as_tibble()
+
+# combine all table 1 categories
+gtsummary_table_dat <- bind_rows(gtsummary_table_dat_grp1to4,
+                                 gtsummary_table_dat_grp1to2) 
+
+# kable table for output in PDF
+kable_table_dat <- gtsummary_table_dat %>%
+  # remove "(Missing)" row for continuous variables
+  filter(`**Characteristic**`!="(Missing)") %>%
+  mutate_all(list(~ gsub('%', '%', ., fixed=TRUE))) %>%
+  mutate_all(list(~ replace_na(., "")))
+names(kable_table_dat) <- gsub("Overall", "Total", gsub("\\*", "", names(kable_table_dat))) 
+
+# add info rows
+# info_row1 <- c("Point-of-care anti-Spike test result","Neg","Neg","Pos","Neg","Neg","Pos","")
+# info_row2 <- c("Number of primary series vaccine doses assigned","2","2","1","2","2","1", "")
+# info_row3 <- c("Overall SARS-CoV-2 status*","Neg","Pos","Pos","Neg","Pos","Pos","")
+# kable_table_dat_all <- rbind(info_row1,
+#                              info_row2,
+#                              kable_table_dat[1:9,],
+#                              info_row3,
+#                              kable_table_dat[10:nrow(kable_table_dat),]) 
+
+# output table
+kable_table_dat %>% 
+  kable(caption = "", 
+      col.names = linebreak(names(kable_table_dat)),
+      row.names = FALSE,
+      booktabs = TRUE,
+      linesep = "",
+      longtable = TRUE,
+      escape = FALSE,
+      align = "l") %>%
+  add_indent(positions = which(!(kable_table_dat$Characteristic %in% c(    "Received vaccine doses as assigned",
+                                                                           "SARS-CoV-2 NAAT result - N (%)",
+                                                                           "Central lab anti-N test result - N (%)",
+                                                                           "Country",
+                                                                           "Sex assigned at birth - N (%)",
+                                                                           "Race - N (%)",
+                                                                           "Median age (range) - years",
+                                                                           "Age category - N (%)",
+                                                                           "Active tuberculosis",
+                                                                           "History of tuberculosis",
+                                                                           "CD4 count** (cells/mm3) - N (%)",
+                                                                           "Median CD4 count** (IQR) - cells/mm3",
+                                                                           "HIV viral load** (copies/mL) - N (%)",
+                                                                           "Median HIV-1 viral load** (IQR) - copies/mL",
+                                                                           "ART status**")))) %>%
+#  add_header_above(c(" ", "Study Group 1" = 2, "Study Group 2" = 1, "Study Group 3" = 2, "Study Group 4" = 1, " ")) %>%
+  kable_styling(latex_options = "repeat_header") %>%
+  column_spec(1, width = "6.3cm") %>%
+  column_spec(2:4, width = "2.2cm") %>%
+  footnote(general_title = "",
+            general = c(""),
+           threeparttable=TRUE) %>%
+  landscape
+
+
+ ## report table in RTF format
+rtf.w <- 11
+ rtf.h <- 8.5
+ rtf.fs <- 11
+ rtf.mar <- c(1,1,1,1)
+ rtf.na <- '0' 
+ out.rtf <- "../report/cohort_table_ICS_RIS.doc"
+ rtf <- RTF(out.rtf, 
+            width = rtf.w, height = rtf.h, 
+            font.size = rtf.fs, omi = rtf.mar)
+ tbl_lab <- paste0("Table 1. Demographics of Random Immunogenicity Subset ICS Immunogenicity Analysis Set participants in the Hybrid Group, Vaccine Group, and Overall. ")
+ 
+ rtf.tbl <- kable_table_dat 
+ 
+  addHeader(rtf, tbl_lab,
+          font.size = 12)
+addTable(rtf, rtf.tbl,col.justify = c("L","L","C","C"))
+addPageBreak(rtf, 
+             width = rtf.w, height = rtf.h, 
+             font.size = rtf.fs, omi = rtf.mar)
+rtf::done(rtf)
+
+
+```
+
+
+
+```{cohort_tbl_ics_sub, eval = doctype != "docx"}
+
+ ds.ics <- ds %>%
+  filter(ph2.m1.ics.cohort == 1 & IMMFL == "Y" & AGRP2N %in% c(1, 2.1)) 
+
+
+# create table 1 with gtsummary package for study groups 1-4 categories
+gtsummary_table_dat_grp1to4 <- ds.ics %>%
+  select(VACCINE_f, CORRECTD, PCRBL_f, CTRBL_f, CTRYNAME, SEX_f, RACE,AGE, AGEGR1_f, TB_active, TB_previous) %>%
+  tbl_summary(by=VACCINE_f,
+              missing_text = "(Missing)",
+              statistic = list("AGE" ~ "{median} ({min}, {max})"),
+              digits = list(all_continuous() ~ c(1,1,1), # digits for continuous variables: mean, min, max
+                            all_categorical() ~ c(0,1)), # digits for categorical variables
+              label = list(CORRECTD ~ "Received vaccine doses as assigned",
+                           PCRBL_f ~ "SARS-CoV-2 NAAT result - N (%)",
+                           CTRBL_f ~ "Central lab anti-N test result - N (%)",
+                           CTRYNAME ~"Country",
+                           SEX_f ~ "Sex assigned at birth - N (%)",
+                           RACE ~ "Race - N (%)",
+                           AGE ~ "Median age (range) - years",
+                           AGEGR1_f ~ "Age category - N (%)",
+                           TB_active = "Active tuberculosis",
+                           TB_previous = "History of tuberculosis")) %>%
+  add_overall(last = TRUE) %>% # logical indicator to display overall column last in table
+  as_tibble()
+
+# create table 1 with gtsummary package for study groups 1-2 categories
+gtsummary_table_dat_grp1to2 <- ds.ics %>%
+ # filter(STRATARN %in% c(1,2)) %>% 
+  select(VACCINE_f, CD4BL_f, CD4BL, HIVVLBL_f, HIVVLBL, ARTBLFL_f) %>%
+  tbl_summary(by=VACCINE_f,
+              missing_text = "(Missing)",
+              statistic = list(c("CD4BL", "HIVVLBL") ~ "{median} ({p25}, {p75})"),
+              digits = list(all_continuous() ~ c(1,1,1), # digits for continuous variables: median, p25, p75
+                            all_categorical() ~ c(0,1)), # digits for categorical variables
+              label = list(CD4BL ~ "Median CD4 count** (IQR) - cells/mm3",
+                           CD4BL_f ~ "CD4 count** (cells/mm3) - N (%)",
+                           HIVVLBL ~ "Median HIV-1 viral load** (IQR) - copies/mL",
+                           HIVVLBL_f ~ "HIV viral load** (copies/mL) - N (%)",
+                           ARTBLFL_f = "ART status**")) %>%
+  add_overall(last = TRUE) %>% # logical indicator to display overall column last in table
+  as_tibble()
+
+# combine all table 1 categories
+gtsummary_table_dat <- bind_rows(gtsummary_table_dat_grp1to4,
+                                 gtsummary_table_dat_grp1to2) 
+
+# kable table for output in PDF
+kable_table_dat <- gtsummary_table_dat %>%
+  # remove "(Missing)" row for continuous variables
+  filter(`**Characteristic**`!="(Missing)") %>%
+  mutate_all(list(~ gsub('%', '%', ., fixed=TRUE))) %>%
+  mutate_all(list(~ replace_na(., "")))
+names(kable_table_dat) <- gsub("Overall", "Total", gsub("\\*", "", names(kable_table_dat))) 
+
+# add info rows
+# info_row1 <- c("Point-of-care anti-Spike test result","Neg","Neg","Pos","Neg","Neg","Pos","")
+# info_row2 <- c("Number of primary series vaccine doses assigned","2","2","1","2","2","1", "")
+# info_row3 <- c("Overall SARS-CoV-2 status*","Neg","Pos","Pos","Neg","Pos","Pos","")
+# kable_table_dat_all <- rbind(info_row1,
+#                              info_row2,
+#                              kable_table_dat[1:9,],
+#                              info_row3,
+#                              kable_table_dat[10:nrow(kable_table_dat),]) 
+
+# output table
+kable_table_dat %>% 
+  kable(caption = "", 
+      col.names = linebreak(names(kable_table_dat)),
+      row.names = FALSE,
+      booktabs = TRUE,
+      linesep = "",
+      longtable = TRUE,
+      escape = FALSE,
+      align = "l") %>%
+  add_indent(positions = which(!(kable_table_dat$Characteristic %in% c(    "Received vaccine doses as assigned",
+                                                                           "SARS-CoV-2 NAAT result - N (%)",
+                                                                           "Central lab anti-N test result - N (%)",
+                                                                           "Country",
+                                                                           "Sex assigned at birth - N (%)",
+                                                                           "Race - N (%)",
+                                                                           "Median age (range) - years",
+                                                                           "Age category - N (%)",
+                                                                           "Active tuberculosis",
+                                                                           "History of tuberculosis",
+                                                                           "CD4 count** (cells/mm3) - N (%)",
+                                                                           "Median CD4 count** (IQR) - cells/mm3",
+                                                                           "HIV viral load** (copies/mL) - N (%)",
+                                                                           "Median HIV-1 viral load** (IQR) - copies/mL",
+                                                                           "ART status**")))) %>%
+#  add_header_above(c(" ", "Study Group 1" = 2, "Study Group 2" = 1, "Study Group 3" = 2, "Study Group 4" = 1, " ")) %>%
+  kable_styling(latex_options = "repeat_header") %>%
+  column_spec(1, width = "6.3cm") %>%
+  column_spec(2:4, width = "2.2cm") %>%
+  footnote(general_title = "",
+            general = c(""),
+           threeparttable=TRUE) %>%
+  landscape
+
+
+ ## report table in RTF format
+rtf.w <- 11
+ rtf.h <- 8.5
+ rtf.fs <- 11
+ rtf.mar <- c(1,1,1,1)
+ rtf.na <- '0' 
+ out.rtf <- "../report/cohort_table_ics_RIS_PLWH.doc"
+ rtf <- RTF(out.rtf, 
+            width = rtf.w, height = rtf.h, 
+            font.size = rtf.fs, omi = rtf.mar)
+ tbl_lab <- paste0("Table 1. Demographics of Random Immunogenicity Analysis Set for participants living with HIV in the Hybrid Group, Vaccine Group, and Overall. ")
+ 
+ rtf.tbl <- kable_table_dat 
+ 
+  addHeader(rtf, tbl_lab,
+          font.size = 12)
+addTable(rtf, rtf.tbl,col.justify = c("L","L","C","C"))
+addPageBreak(rtf, 
+             width = rtf.w, height = rtf.h, 
+             font.size = rtf.fs, omi = rtf.mar)
+rtf::done(rtf)
+```
+
+
+
+```{tbl1_serum, eval = doctype != "docx"}
+
+source("../macro/make_functions.R")
+
+#### calculate the IgG N Index (AU/ml) (no response call) , IgG Spike BA.5 (AU/ml), nAb ID50 BA.4/5 (AU/ml)response rate and geometric mean by case and non case
+### read BAMA response varibal
+
+ ds.seru <- ds %>%
+  filter(ph2.m1.sera == 1 ) 
+
+
+bama.resp.a23 <-  read.csv("../pdata/covpn3008_bammsd_20240206/pdata/CoVPN3008_BAMMSD_20240405_IQC_IgG.csv") %>%
+  filter(analyte %in% c("SARS-CoV-2 Spike (BA.5)")  & aval_cd == "response") %>%
+  filter(visitno %in% c(2, 3, 4)) %>%
+  mutate(Subjectid = paste0("C3008-", ptid),
+         visitno = case_when(visitno == 2 ~ "response_M0",
+                             visitno ==3 |visitno ==4 ~ "response_M1")) %>%
+  select("Subjectid", "visitno", "analyte", "aval") %>%
+  pivot_wider(names_from = visitno, values_from = aval) %>%
+  mutate(antigen.lab = "A23" )
+
+bama.au.a23 <-  read.csv("../adata/COVID_bama_resp.csv") %>%
+  filter(antigen.lab == "A23" ) %>%
+    filter(visitno %in% c(2, 3, 4)) %>%
+  mutate(Subjectid = paste0("C3008-", ptid),
+         visitno = case_when(visitno == 2 ~ "obsconc_AU_tuc_M0",
+                             visitno ==3 |visitno ==4 ~ "obsconc_AU_tuc_M1")) %>%
+  select(Subjectid, antigen.lab, obsconc_AU_tuc, isotype, concentration_units,visitno, pos_cut) %>%
+  pivot_wider(names_from = visitno, values_from = obsconc_AU_tuc)
+
+
+bama.a23 <- bama.resp.a23 %>% full_join(bama.au.a23) %>%
+  select(-analyte)
+
+
+bama.a15 <- read.csv("../adata/COVID_bama_resp.csv") %>%
+  select(ptid, antigen.lab, obsconc_AU_tuc, isotype, concentration_units,visitno, pos_cut)%>% 
+   filter(visitno %in% c(2, 3, 4)) %>%
+  rename(Subjectid = ptid) %>%
+  mutate(Subjectid = paste0("C3008-", as.character(Subjectid)),
+         visitno = case_when(visitno == 2 ~ "M0",
+                             visitno ==3 |visitno ==4 ~ "M1"))%>%
+  filter(antigen.lab == "A15" ) 
+
+
+###### make response call by the following steps
+###### 1. [for baseline visit 2]For all antigen expect IgG N, keep using the positivity call offered by lab. 
+###### 2. [for baseline visit 2]For IgG N, if AU < 3970/2, the response is negative, if AU >= 3970/2, the response is positive
+bama.a15 <- bama.a15 %>% 
+  mutate(response = case_when(obsconc_AU_tuc < pos_cut ~ 0,
+                              obsconc_AU_tuc >= pos_cut ~ 1)) %>%
+  pivot_wider(names_from = visitno, values_from = c(response, obsconc_AU_tuc)) 
+
+bama.resp <- rbind(bama.a15, bama.a23)
+
+##### 3.If the M0 = neg, Peak resp = 1 (response by lab) ~ resp =1 at Peak
+##### If the M0 = neg, Peak resp = 0 (by lab) ~ resp = 0 at Peak
+##### If M0 = pos and Peak resp = 1 and need to 4 folder increase ~ resp at Peak =1
+##### If M0 = pos ~ Peak resp = 1 and change less 4 fold ~ resp at Peak = 0 
+
+bama.resp <- bama.resp %>%
+  mutate(au_ratio = obsconc_AU_tuc_M1/obsconc_AU_tuc_M0) %>%
+  mutate(response_M1_adj = case_when(response_M0 == 0 & response_M1 == 0 ~ 0,
+                                     response_M0 == 0 & response_M1 == 1 ~ 1,
+                                     response_M0 == 1 & response_M1 == 0 ~ 0,
+                                     response_M0 == 1 & response_M1 == 1 & au_ratio >= 4 ~ 1,
+                                     response_M0 == 1 & response_M1 == 1 & au_ratio < 4 ~ 0)) %>%
+  select(Subjectid, antigen.lab, response_M0, response_M1_adj) %>%
+  pivot_wider(names_from = antigen.lab, values_from = c(response_M0, response_M1_adj)) %>%
+  rename(BA23AU.resp  = response_M0_A23,
+         M1A23AU.resp = response_M1_adj_A23,
+         BA15AU.resp  = response_M0_A15,
+         M1A15AU.resp = response_M1_adj_A15)
+
+
+
+#### read nab data 
+
+nab.resp <- read.csv("../pdata/COVPN3008_NAB07_SA_20240705/pdata/COVPN3008_NAB07_SA_resp_long_20240711.csv") %>%
+  filter(isolate == "BA.4/5" & aval_cd == "response_ID50" & visitno %in% c(2,3,4)) %>%
+  mutate(Subjectid = paste0("C3008-", ptid),
+         visitno = case_when(visitno == 2 ~ "BBA45ID50.resp",
+                             visitno ==3 |visitno ==4 ~ "M1BA45ID50.resp")) %>%
+  select("Subjectid", "visitno", "aval") %>%
+  pivot_wider(names_from = visitno, values_from = aval)
+
+
+ds.tmp.seru <- left_join(ds.seru %>%
+                      mutate(EventIndPrimary1 = case_when(EventIndPrimary1 == 0 ~ "Non-cases",
+                                                           EventIndPrimary1 == 1 ~ "Cases")) %>%
+  select("Subjectid", "BIGGMSDA15AU", "BIGGMSDA23AU", "M1IGGMSDA15AU", "M1IGGMSDA23AU", "BBA45ID50", "M1BA45ID50", "EventIndPrimary1", "VACCINE_f"),
+  bama.resp) %>%
+  left_join(.,nab.resp) %>%
+  mutate(BA23AU.resp = as.numeric(BA23AU.resp),
+         M1A23AU.resp = as.numeric(M1A23AU.resp),
+         BA15AU.resp = as.numeric(BA15AU.resp),
+         M1A15AU.resp = as.numeric(M1A15AU.resp),
+         BBA45ID50.resp = as.numeric(BBA45ID50.resp),
+         M1BA45ID50.resp = as.numeric(M1BA45ID50.resp))
+
+
+#### generate response rate table
+tbl <- data_frame()
+
+for(resp in c("BA15AU.resp", "BA23AU.resp", "BBA45ID50.resp", "M1A15AU.resp", "M1A23AU.resp", "M1BA45ID50.resp")){
+  
+   tbl.tmp  <- point_response(data = ds.tmp.seru , response_var = resp , group_var = c("EventIndPrimary1", "VACCINE_f"), out_names = c("Response Rate", "95% CI") ) %>%
+     mutate(antigen = resp)
+  
+   tbl <- rbind(tbl, tbl.tmp)
+  
+}
+
+tbl1.1 <- tbl %>% pivot_wider(names_from = EventIndPrimary1, values_from = c( `Response Rate`, `95% CI`) ) %>%
+  mutate(resp.diff = paste0( round(as.numeric(qdapRegex::ex_between(`Response Rate_Non-cases`, "= ", "%")) - as.numeric(qdapRegex::ex_between(`Response Rate_Cases`, "= ", "%")), 1), "%") ) %>%
+  mutate(resp.diff = case_when(resp.diff == "NA%" ~ "",
+                               TRUE ~ resp.diff)) %>%
+  mutate(antigen = case_when(antigen == "BA15AU.resp" ~ "BIGGMSDA15AU",
+                             antigen == "BA23AU.resp" ~ "BIGGMSDA23AU",
+                             antigen == "M1A15AU.resp" ~ "M1IGGMSDA15AU",
+                             antigen == "M1A23AU.resp" ~ "M1IGGMSDA23AU",
+                             antigen == "BBA45ID50.resp" ~ "BBA45ID50",
+                             antigen == "M1BA45ID50.resp" ~ "M1BA45ID50"))
+
+
+#### generate magnitude table
+tbl <- data_frame()
+
+for(magnitude in c("BIGGMSDA15AU", "BIGGMSDA23AU", "M1IGGMSDA15AU", "M1IGGMSDA23AU", "BBA45ID50", "M1BA45ID50")){
+  
+   tbl.tmp <- desc_stats_table(data = ds.tmp.seru , response_var = magnitude , group_var = c("EventIndPrimary1", "VACCINE_f"), log =TRUE, ci =TRUE, na.rm=TRUE ) %>%
+     mutate(antigen = magnitude,
+            `Geometric Mean (GM)` = gm_mean.est,
+            `GM 95% CI` = paste0("(", gm_mean.ci_l, ", " , gm_mean.ci_u, ")"))%>%
+     select("EventIndPrimary1", "VACCINE_f", "n", `Geometric Mean (GM)`, `GM 95% CI`, "antigen")
+  
+   tbl <- rbind(tbl, tbl.tmp)
+  
+}
+
+tbl1.2 <- tbl %>% pivot_wider(names_from = EventIndPrimary1, values_from = c( n, `Geometric Mean (GM)`, `GM 95% CI`) ) %>%
+  mutate(`GM Ratio` =  round(`Geometric Mean (GM)_Non-cases`/`Geometric Mean (GM)_Cases`, 1)) %>%
+ select(VACCINE_f, antigen, n_Cases,  `Geometric Mean (GM)_Cases`,  `GM 95% CI_Cases`, `n_Non-cases`, `Geometric Mean (GM)_Non-cases` , `GM 95% CI_Non-cases`)
+
+
+ds.seru.resp.long <- ds.tmp.seru %>% 
+  select(Subjectid, EventIndPrimary1, VACCINE_f, BA15AU.resp, BA23AU.resp, M1A15AU.resp, M1A23AU.resp, BBA45ID50.resp, M1BA45ID50.resp ) %>%
+  pivot_longer(cols = contains("resp"),
+               names_to = "assay",
+               values_to = "response") %>%
+  mutate(assay = case_when(assay == "BA15AU.resp" ~ "BIGGMSDA15AU",
+                             assay == "BA23AU.resp" ~ "BIGGMSDA23AU",
+                             assay == "M1A15AU.resp" ~ "M1IGGMSDA15AU",
+                             assay == "M1A23AU.resp" ~ "M1IGGMSDA23AU",
+                             assay == "BBA45ID50.resp" ~ "BBA45ID50",
+                             assay == "M1BA45ID50.resp" ~ "M1BA45ID50"))
+  
+  
+ds.seru.value.long <- ds.tmp.seru %>% 
+  select(Subjectid, EventIndPrimary1, VACCINE_f, BIGGMSDA15AU, BIGGMSDA23AU, M1IGGMSDA15AU, M1IGGMSDA23AU, BBA45ID50, M1BA45ID50) %>%
+  pivot_longer(cols = BIGGMSDA15AU:M1BA45ID50 ,
+               names_to = "assay",
+               values_to = "value") 
+  
+  
+ds.seru.long <- ds.seru.resp.long %>% full_join(., ds.seru.value.long)%>%
+  mutate(value = log10(value))
+
+
+resp.diff.ci <- ds.seru.resp.long %>%
+  group_by(assay , EventIndPrimary1, VACCINE_f) %>%
+  summarize(n = n(),
+            r = sum(response, na.rm=TRUE))%>% 
+  pivot_wider(names_from = EventIndPrimary1, values_from = c( n, r))
+
+  resp.ci <- data_frame()
+
+  for(i in 1:nrow(resp.diff.ci)){
+    
+    ds.tmp <-resp.diff.ci[i,] 
+    
+    
+    resp.ci.tmp <- ds.tmp %>%
+  mutate(lcl = prop.test(x = c(ds.tmp$r_Cases, ds.tmp$`r_Non-cases`), 
+                               n = c(ds.tmp$n_Cases, ds.tmp$`n_Non-cases`), 
+                               alternative = "two.sided", 
+                               correct = FALSE)$conf.int[1],
+         
+         ucl = prop.test(x = c(ds.tmp$r_Cases, ds.tmp$`r_Non-cases`), 
+                               n = c(ds.tmp$n_Cases, ds.tmp$`n_Non-cases`), 
+                               alternative = "two.sided", 
+                               correct = FALSE)$conf.int[2]) 
+    
+    resp.ci <- rbind(resp.ci, resp.ci.tmp)
+    
+  }
+  
+  
+  resp.ci <- resp.ci %>%
+    mutate(lcl =round(lcl*100,2),
+           ucl =round(ucl*100, 2)) %>%
+    mutate(`resp CI` = paste0("(", lcl, "%", ", ", ucl, "%)")) %>%
+    select(assay,  VACCINE_f, `resp CI`) %>%
+    rename(antigen = assay)
+
+  
+  
+  
+  
+
+
+# joining dataframes with regression estimates and model summaries
+tbl1.3 <- dplyr::full_join(
+ # to get a tidy dataframe of regression estimates
+  x = ds.seru.long %>%
+    group_by(VACCINE_f, assay) %>% 
+    group_modify(.f = ~ broom::tidy(lm(value ~ EventIndPrimary1, data = .x), conf.int = TRUE)),
+  # to get a tidy dataframe of model summaries
+  y = ds.seru.long %>%
+    group_by(VACCINE_f, assay) %>%
+    group_modify(.f = ~ broom::glance(lm(value ~ EventIndPrimary1, data = .x))),
+  by = c("VACCINE_f", "assay")
+) %>%
+  dplyr::ungroup(x = .) %>%
+  filter(term == "EventIndPrimary1Non-cases") %>%
+  mutate(`GM Ratio` = round(10^estimate, 2),
+         `GM Ratio CI` = paste0("(", round(10^conf.low, 2), ", ", round(10^conf.high, 2), ")")) %>%
+  select(VACCINE_f, assay, `GM Ratio`, `GM Ratio CI`) %>%
+  rename(antigen = assay)
+
+
+
+tbl1 <- full_join(tbl1.1, tbl1.2) %>%
+  full_join(resp.ci) %>%
+  full_join(., tbl1.3) %>%
+  mutate(VACCINE_f = factor(VACCINE_f, levels = c("Hybrid", "Vaccine")),
+         antigen = factor(antigen, levels = c("BIGGMSDA15AU", "BIGGMSDA23AU", "BBA45ID50", "M1IGGMSDA15AU", "M1IGGMSDA23AU", "M1BA45ID50"))) %>%
+  arrange(VACCINE_f, antigen) %>%
+  select(VACCINE_f, antigen, n_Cases, `Response Rate_Cases`, `95% CI_Cases`, `Geometric Mean (GM)_Cases`, `GM 95% CI_Cases`, `n_Non-cases`, `Response Rate_Non-cases`, `95% CI_Non-cases`,
+         `Geometric Mean (GM)_Non-cases`, `GM 95% CI_Non-cases`,
+          `resp.diff`, `resp CI`  , `GM Ratio`, `GM Ratio CI`)
+
+
+
+
+## report table in RTF format
+rtf.w <- 11
+ rtf.h <- 8.5
+ rtf.fs <- 11
+ rtf.mar <- c(1,1,1,1)
+ rtf.na <- '0' 
+ out.rtf <- "../report/tbl1_serum.doc"
+ rtf <- RTF(out.rtf, 
+            width = rtf.w, height = rtf.h, 
+            font.size = rtf.fs, omi = rtf.mar)
+ tbl_lab <- paste0("Table 1. Immune marker response frequencies at M0 and vaccine-response frequencies at Peak (when applicable) by COVID-19 outcome status, geometric means (GMs) by COVID-19 outcome status, and their comparisons between non-cases and cases ")
+ 
+ rtf.tbl <- tbl1 
+ 
+  addHeader(rtf, tbl_lab,
+          font.size = 12)
+addTable(rtf, rtf.tbl,col.justify = c("L","L","C","C","C","C","C","C","C","C","C","C","C","C","C","C"))
+addPageBreak(rtf, 
+             width = rtf.w, height = rtf.h, 
+             font.size = rtf.fs, omi = rtf.mar)
+rtf::done(rtf)
+
+
+
+```
+
+
+
+```{tbl1_ics, eval = doctype != "docx"}
+
+#### calculate the  CD4+ T-cells expressing IFNg and/or IL-2 BA.5 N,  CD4+ T-cells expressing IFNg and/or IL-2 and/or CD154 BA.5 N ,  CD4+ T-cells expressing IFNg and/or IL-2 BA.5 Spike,  CD4+ T-cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike response rate and geometric mean by case and non case
+### read ics data
+### in the iCS data, keep IFNg_OR_IL2 (C03), IFNg_OR_IL2_OR_154-"Spike BA.4/5"(A11), "Spike Wuhan"(A13), "BA.4-5 N" (A02), "Wuhan N" (A08)
+
+ ds.ics <- ds %>%
+  filter(ph2.m1.ics == 1 ) 
+# 
+# %>%
+#   select("Subjectid", "EventIndPrimary1", "VACCINE_f","AGRP2N", "BT4C03A11", "BT4C03A13", "BT4C03A02", "BT4C03A08",
+#                                                                  "M1T4C03A11", "M1T4C03A13", "M1T4C03A02", "M1T4C03A08",
+#                                                                   "BT8C03A11", "BT8C03A13", "BT8C03A02", "BT8C03A08",
+#                                                                  "M1T8C03A11", "M1T8C03A13", "M1T8C03A02", "M1T8C03A08",
+#                                                                   "BT4C04A11", "BT4C04A13", "BT4C04A02", "BT4C04A08",
+#                                                                  "M1T4C04A11", "M1T4C04A13", "M1T4C04A02", "M1T4C04A08" )
+# 
+# ds.ics.long <- ds.ics %>%
+#   pivot_longer(cols = BT4C03A11:M1T8C03A08,
+#                names_to = "assay",
+#                values_to = "pctpos_adj") %>%
+#   mutate(visitno = case_when(startsWith(assay, "B") ~ "M0",
+#                              startsWith(assay, "M1") ~ "M1")) %>%
+#   mutate(tcell = case_when(grepl("T4", assay) ~ " CD4+",
+#                            grepl("T8", assay,)  ~ "CD8+")) %>%
+#   mutate(cytokine = case_when(grepl("C03", assay) ~ " IFNg_OR_IL2",
+#                            grepl("T8", assay,)  ~ "CD8+"))
+  
+
+
+ics.pool <- read.csv("../pdata/covpn3008_fcm08_CH_AP59_20231120_case-cohort_correlates/pdata/covpn3008_fcm08_CH_AP59_pool_p.csv") %>%
+  filter(cytokine %in% c('IFNg_OR_IL2', "IFNg_OR_IL2_OR_154") &
+           antigen %in% c("Spike BA.4/5",
+                          "Spike Wuhan"
+                          ) &
+           tcellsub == "4+")
+
+ics.resp <-
+  read.csv("../pdata/covpn3008_fcm08_CH_AP59_20231120_case-cohort_correlates/pdata/covpn3008_fcm08_CH_AP59_rpt_resp.csv") %>%
+  filter(cytokine %in% c('IFNg_OR_IL2', "IFNg_OR_IL2_OR_154") &
+           antigen %in% c("BA.4-5 N",
+                          "Wuhan N")&
+           tcellsub == "4+")
+
+
+
+pubid <- read_sas("../adata/pubid.sas7bdat") %>%
+  select(SUBJID, PUBID)%>%
+  rename(ptid = SUBJID)
+
+colnames(pubid) <- tolower(colnames(pubid))
+
+
+colnames(ics.pool) <- tolower(colnames(ics.pool))
+colnames(ics.resp) <- tolower(colnames(ics.resp))
+
+
+ics <- bind_rows(
+  ics.pool %>%
+    dplyr::select(labid, ptid, visitno,
+           tcellsub, cytokine, antigen, pctpos_adj, response),
+  ics.resp %>% dplyr::select(labid, ptid, visitno,
+                      tcellsub, cytokine, antigen, pctpos_adj, response)
+  ) %>%
+  mutate(Subjectid = paste0("C3008-", ptid)) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj <= 0.01 ~ 0.01,
+                                TRUE ~ pctpos_adj))
+
+
+
+ics.vacc <- read.csv("../pdata/ICS_responder.csv") %>%
+  rename(visitno = type,
+         cytokine = cyt,
+         antigen = ant,
+         VACCINE_f = gp,
+         EventIndPrimary1 = status) %>%
+  mutate(vacc.response = case_when(responder == "TRUE" ~ 1,
+                               responder == "FALSE" ~ 0)) %>%
+  left_join(., pubid) %>%
+  select(ptid, vacc.response, visitno, cytokine, antigen, EventIndPrimary1, VACCINE_f) %>%
+  mutate(antigen = case_when(antigen == "N_BA45" ~ "BA.4-5 N",
+                             antigen == "Spike_BA45" ~ "Spike BA.4/5")) %>%
+  mutate(EventIndPrimary1 = case_when(EventIndPrimary1 == "case" ~ "Cases",
+                                      EventIndPrimary1 == "noncase"  ~ "Non-cases")) %>%
+  mutate(visitno = case_when(visitno == "Peak" ~ "M1",
+                             visitno == "M0"  ~ "M0")) %>%
+  mutate(cytokine = case_when(cytokine == "IFNg_OR_IL2" ~ "IFNg_OR_IL2",
+         cytokine == "IFNg_OR_IL2_154" ~ "IFNg_OR_IL2_OR_154")) %>%
+   mutate(Subjectid = paste0("C3008-", ptid)) %>%
+  select(-ptid)
+
+         
+         
+ds.tmp.ics <- left_join(ds.ics %>%
+                      mutate(EventIndPrimary1 = case_when(EventIndPrimary1 == 0 ~ "Non-cases",
+                                                           EventIndPrimary1 == 1 ~ "Cases")) %>%
+  select("Subjectid", "EventIndPrimary1", "VACCINE_f","AGRP2N") %>%
+    filter(AGRP2N %in% c(1, 2.1)),
+  ics) %>%
+  mutate(visitno = case_when(visitno == 2 ~ "M0",
+                             visitno == 3 | visitno == 4 ~ "M1")) %>%
+  mutate(value = log10(pctpos_adj)) %>%
+  left_join(., ics.vacc)
+
+
+ds.tmp.ics.tbl1 <- ds.tmp.ics %>% filter(antigen %in% c("Spike BA.4/5", "BA.4-5 N"))
+
+
+tbl2.1 <- point_response(data = ds.tmp.ics.tbl1, response_var = "vacc.response" , group_var = c("visitno", "cytokine", "antigen" ,"EventIndPrimary1", "VACCINE_f"), out_names = c("Response Rate", "95% CI") ) %>% 
+  pivot_wider(names_from = EventIndPrimary1, values_from = c( `Response Rate`, `95% CI`) ) %>%
+  mutate(resp.diff = paste0( round(as.numeric(qdapRegex::ex_between(`Response Rate_Non-cases`, "= ", "%")) - as.numeric(qdapRegex::ex_between(`Response Rate_Cases`, "= ", "%")), 1), "%") ) %>%
+  mutate(resp.diff = case_when(resp.diff == "NA%" ~ "",
+                               TRUE ~ resp.diff))
+
+
+tbl2.2 <- desc_stats_table(data = ds.tmp.ics.tbl1, response_var = "pctpos_adj" , group_var = c("visitno", "cytokine", "antigen" ,"EventIndPrimary1", "VACCINE_f"), log =TRUE, ci =TRUE, na.rm=TRUE,digits = 4 )%>% 
+     mutate(`Geometric Mean (GM)` = gm_mean.est,
+            `GM 95% CI` = case_when(n == 1 ~ "-",
+                          TRUE ~ paste0("(", gm_mean.ci_l, ", " , gm_mean.ci_u, ")"))) %>%
+     select("visitno", "cytokine", "antigen" , "EventIndPrimary1", "VACCINE_f", "n", `Geometric Mean (GM)`, `GM 95% CI`) %>%
+  pivot_wider(names_from = EventIndPrimary1, values_from = c( n, `Geometric Mean (GM)`, `GM 95% CI`) ) %>%
+ select(VACCINE_f, visitno, cytokine, antigen, `n_Cases`, `Geometric Mean (GM)_Cases` , `GM 95% CI_Cases`, `n_Non-cases`, `Geometric Mean (GM)_Non-cases` , `GM 95% CI_Non-cases`)
+
+ 
+
+# joining dataframes with regression estimates and model summaries
+tbl2.3 <- dplyr::full_join(
+ # to get a tidy dataframe of regression estimates
+  x = ds.tmp.ics.tbl1 %>%
+    group_by(VACCINE_f, visitno, cytokine, antigen) %>% 
+    group_modify(.f = ~ broom::tidy(lm(value ~ EventIndPrimary1, data = .x), conf.int = TRUE)),
+  # to get a tidy dataframe of model summaries
+  y = ds.tmp.ics.tbl1 %>%
+    group_by(VACCINE_f, visitno, cytokine, antigen) %>%
+    group_modify(.f = ~ broom::glance(lm(value ~ EventIndPrimary1, data = .x))),
+  by = c("VACCINE_f", "visitno", "cytokine", "antigen")
+) %>%
+  dplyr::ungroup(x = .) %>%
+  filter(term == "EventIndPrimary1Non-cases") %>%
+  mutate(`GM Ratio` = round(10^estimate, 2),
+         `GM Ratio CI` = paste0("(", round(10^conf.low, 2), ", ", round(10^conf.high, 2), ")")) %>%
+  select(VACCINE_f, visitno, cytokine, antigen, `GM Ratio`, `GM Ratio CI`) 
+
+
+
+resp.diff.ci <- ds.tmp.ics.tbl1 %>%
+  group_by(visitno, cytokine, antigen , EventIndPrimary1, VACCINE_f) %>%
+  summarize(n = n(),
+            r = sum(response))%>% 
+  pivot_wider(names_from = EventIndPrimary1, values_from = c( n, r))
+
+  resp.ci <- data_frame()
+
+  for(i in 1:nrow(resp.diff.ci)){
+    
+    ds.tmp <-resp.diff.ci[i,] 
+    
+    
+    resp.ci.tmp <- ds.tmp %>%
+  mutate(lcl = prop.test(x = c(ds.tmp$r_Cases, ds.tmp$`r_Non-cases`), 
+                               n = c(ds.tmp$n_Cases, ds.tmp$`n_Non-cases`), 
+                               alternative = "two.sided", 
+                               correct = FALSE)$conf.int[1],
+         
+         ucl = prop.test(x = c(ds.tmp$r_Cases, ds.tmp$`r_Non-cases`), 
+                               n = c(ds.tmp$n_Cases, ds.tmp$`n_Non-cases`), 
+                               alternative = "two.sided", 
+                               correct = FALSE)$conf.int[2]) 
+    
+    resp.ci <- rbind(resp.ci, resp.ci.tmp)
+    
+  }
+  
+  
+  resp.ci <- resp.ci %>%
+    mutate(lcl =round(lcl*100,2),
+           ucl =round(ucl*100, 2)) %>%
+    mutate(`resp CI` = paste0("(", lcl, "%", ", ", ucl, "%)")) %>%
+    select(visitno,cytokine, antigen, VACCINE_f, `resp CI`)
+
+
+
+tbl2 <- full_join(tbl2.1, tbl2.2) %>%
+  full_join(., resp.ci) %>%
+  full_join(., tbl2.3) %>%
+  mutate(VACCINE_f = factor(VACCINE_f, levels = c("Hybrid", "Vaccine")),
+         viaitno = factor(visitno, levels = c("M0", "M1")),
+         antigen = factor(antigen, levels = c("BA.4-5 N", "Spike BA.4/5", "Spike Wuhan"))) %>%
+  arrange(VACCINE_f, viaitno, antigen) %>%
+  select(VACCINE_f, viaitno,cytokine, antigen, n_Cases, `Response Rate_Cases`, `95% CI_Cases`, `Geometric Mean (GM)_Cases`, `GM 95% CI_Cases`, `n_Non-cases`, `Response Rate_Non-cases`, `95% CI_Non-cases`,
+         `Geometric Mean (GM)_Non-cases`, `GM 95% CI_Non-cases`,
+          `resp.diff`, `resp CI`, `GM Ratio`, `GM Ratio CI`)
+  
+
+
+
+## report table in RTF format
+rtf.w <- 11
+ rtf.h <- 8.5
+ rtf.fs <- 11
+ rtf.mar <- c(1,1,1,1)
+ rtf.na <- '0' 
+ out.rtf <- "../report/tbl1_ics.doc"
+ rtf <- RTF(out.rtf, 
+            width = rtf.w, height = rtf.h, 
+            font.size = rtf.fs, omi = rtf.mar)
+ tbl_lab <- paste0("Table 1. Immune marker response frequencies at M0 and vaccine-response frequencies at Peak (when applicable) by COVID-19 outcome status, geometric means (GMs) by COVID-19 outcome status, and their comparisons between non-cases and cases ")
+ 
+ rtf.tbl <- tbl2 
+ 
+  addHeader(rtf, tbl_lab,
+          font.size = 12)
+addTable(rtf, rtf.tbl,col.justify = c("L","L","L","C","C","C","C","C","C","C","C","C","C","C","C","C", "C","C"))
+addPageBreak(rtf, 
+             width = rtf.w, height = rtf.h, 
+             font.size = rtf.fs, omi = rtf.mar)
+rtf::done(rtf)
+
+
+
+
+# ############# check geometric mean for CD4+ IFNg and/or IL-2 T-cell level against the Spike Index peptides at M0 in the Hybrid Group restricting to the RIS
+# 
+# tbl2.1 <- point_response(data = subset(ds.tmp.ics, antigen == "Spike Wuhan"), response_var = "response" , group_var = c("visitno", "cytokine", "antigen" ,"EventIndPrimary1", "VACCINE_f"), out_names = c("Response Rate", "95% CI") ) %>% 
+#   pivot_wider(names_from = EventIndPrimary1, values_from = c( `Response Rate`, `95% CI`) ) %>%
+#   mutate(resp.diff = paste0( round(as.numeric(qdapRegex::ex_between(`Response Rate_Non-cases`, "= ", "%")) - as.numeric(qdapRegex::ex_between(`Response Rate_Cases`, "= ", "%")), 1), "%") ) %>%
+#   mutate(resp.diff = case_when(resp.diff == "NA%" ~ "",
+#                                TRUE ~ resp.diff))
+# 
+# 
+# tbl2.2 <- desc_stats_table(data = subset(ds.tmp.ics, antigen == "Spike Wuhan"), response_var = "pctpos_adj" , group_var = c("visitno", "cytokine", "antigen", "VACCINE_f"), log =TRUE, ci =TRUE, na.rm=TRUE,digits = 4 )%>% 
+#      mutate(`Geometric Mean (GM)` = gm_mean.est,
+#             `GM 95% CI` = case_when(n == 1 ~ "-",
+#                           TRUE ~ paste0("(", gm_mean.ci_l, ", " , gm_mean.ci_u, ")"))) %>%
+#      select("visitno", "cytokine", "antigen" , "VACCINE_f", "n", `Geometric Mean (GM)`, `GM 95% CI`) 
+                         
+
+```
+
+
+```{fig1_violin_a_c, eval = doctype != "docx"}
+library(ggnewscale)
+library(hvtnFigures)
+source("../macro/cor_graphics_functions_partA.R")
+
+
+ds.seru.plot1.resp <- ds.tmp.seru %>% 
+  select(Subjectid, EventIndPrimary1, VACCINE_f, BA15AU.resp, BA23AU.resp, M1A15AU.resp, M1A23AU.resp, BBA45ID50.resp, M1BA45ID50.resp ) %>%
+  pivot_longer(cols = contains("resp"),
+               names_to = "assay",
+               values_to = "response") %>%
+  mutate(assay = case_when(assay == "BA15AU.resp" ~ "BIGGMSDA15AU",
+                             assay == "BA23AU.resp" ~ "BIGGMSDA23AU",
+                             assay == "M1A15AU.resp" ~ "M1IGGMSDA15AU",
+                             assay == "M1A23AU.resp" ~ "M1IGGMSDA23AU",
+                             assay == "BBA45ID50.resp" ~ "BBA45ID50",
+                             assay == "M1BA45ID50.resp" ~ "M1BA45ID50"))
+  
+  
+ds.seru.plot1.value <- ds.tmp.seru %>% 
+  select(Subjectid, EventIndPrimary1, VACCINE_f, BIGGMSDA15AU, BIGGMSDA23AU, M1IGGMSDA15AU, M1IGGMSDA23AU, BBA45ID50, M1BA45ID50) %>%
+  pivot_longer(cols = BIGGMSDA15AU:M1BA45ID50 ,
+               names_to = "assay",
+               values_to = "value") 
+  
+  
+ds.seru.plot1 <- ds.seru.plot1.resp %>% full_join(., ds.seru.plot1.value)%>%
+  mutate(panel = "Serum assay", #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")),
+         value = log10(value))
+
+cohort_event = c("Cases", "Non-cases")
+
+
+### generate (A-C) IgG N Index, IgG Spike BA.5, nAb-ID50 BA.4/5 at M0 for Hybrid
+ds.seru.plot1.a_c <- ds.seru.plot1 %>%
+  filter(VACCINE_f == "Hybrid") %>%
+  filter(assay %in% c("BBA45ID50", "BIGGMSDA15AU", "BIGGMSDA23AU")) %>%
+  mutate(assay_lab = case_when(assay == "BBA45ID50" ~ "ID50 Titer (AU/mL)",
+                               assay == "BIGGMSDA15AU" ~ "AU/mL",
+                               assay == "BIGGMSDA23AU" ~ "AU/mL"),
+         fig_num = case_when(assay == "BBA45ID50" ~ "1.C",
+                               assay == "BIGGMSDA15AU" ~ "1.A",
+                               assay == "BIGGMSDA23AU" ~ "1.B")) %>%
+  mutate(panel = case_when(assay == "BBA45ID50" ~ "M0 nAb-ID50 BA.4/5",
+                               assay == "BIGGMSDA15AU" ~ "M0 IgG N Index",
+                               assay == "BIGGMSDA23AU" ~ "M0 IgG Spike BA.5"),
+         assay = factor(assay, levels = c("BIGGMSDA15AU", "BIGGMSDA23AU", "BBA45ID50"))) %>%
+  arrange(assay)
+
+panel_list = unique(ds.seru.plot1.a_c$assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plot1.a_c <- get_desc_by_group(ds.seru.plot1.a_c, groupby_vars1) 
+
+
+
+ violin1.a_c <- f_case_non_case_by_time_assay(
+    dat = ds.seru.plot1.a_c ,
+    assays = panel_list,
+    times = panel_list,
+    axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 40,
+    panel.text.size = 20,
+    axis.title.size = 30,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+    y.lab.position = 7)
+ 
+
+ 
+```
+
+
+``````{fig1_violin_d_e, eval = doctype != "docx"}
+### generate (D-E) IgG Spike BA.5, nAb-ID50 BA.4/5 at Peak for Hybrid
+ds.seru.plot1.d_e <- ds.seru.plot1 %>%
+  filter(VACCINE_f == "Hybrid") %>%
+  filter(assay %in% c("M1BA45ID50", "M1IGGMSDA23AU")) %>%
+  mutate(assay_lab = case_when(assay == "M1BA45ID50" ~ "ID50 Titer (AU/mL)",
+                               assay == "M1IGGMSDA23AU" ~ "AU/mL"),
+         fig_num = case_when(assay == "M1BA45ID50" ~ "1.E",
+                               assay == "M1IGGMSDA23AU" ~ "1.D"))%>%
+  mutate(panel = case_when(assay == "M1BA45ID50" ~ "Peak visit nAb-ID50 BA.4/5",
+                               assay == "M1IGGMSDA23AU" ~ "Peak visit IgG Spike BA.5"))
+
+panel_list = unique(ds.seru.plot1.d_e $assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plot1.d_e <- get_desc_by_group(ds.seru.plot1.d_e, groupby_vars1) 
+
+ violin1.d_e <- f_case_non_case_by_time_assay(
+    dat = ds.seru.plot1.d_e ,
+    assays = panel_list,
+    times = panel_list,
+    axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 40,
+    panel.text.size = 20,
+    axis.title.size = 30,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+    y.lab.position = 7)
+
+ 
+violin1.d_e
+
+
+```
+
+
+
+```{fig1_violin_f_g, eval = doctype != "docx"}
+### generate (F-G) IgG Spike BA.5, nAb-ID50 BA.4/5 at Peak for Vaccine
+ds.seru.plot1.f_g <- ds.seru.plot1 %>%
+  filter(VACCINE_f == "Vaccine") %>%
+  filter(assay %in% c("M1BA45ID50", "M1IGGMSDA23AU")) %>%
+  mutate(assay_lab = case_when(assay == "M1BA45ID50" ~ "ID50 Titer (AU/mL)",
+                               assay == "M1IGGMSDA23AU" ~ "AU/mL"),
+         fig_num = case_when(assay == "M1BA45ID50" ~ "1.G",
+                               assay == "M1IGGMSDA23AU" ~ "1.F"))%>%
+  mutate(panel = case_when(assay == "M1BA45ID50" ~ "Peak visit nAb-ID50 BA.4/5",
+                               assay == "M1IGGMSDA23AU" ~ "Peak visit IgG Spike BA.5"))
+
+panel_list = unique(ds.seru.plot1.f_g $assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plot1.f_g <- get_desc_by_group(ds.seru.plot1.f_g, groupby_vars1) 
+
+ violin1.f_g <- f_case_non_case_by_time_assay(
+    dat = ds.seru.plot1.f_g ,
+    assays = panel_list,
+    times = panel_list,
+     axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 40,
+    panel.text.size = 20,
+    axis.title.size = 30,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+    y.lab.position = 7)
+
+
+
+ 
+```
+
+
+```{fig1_violin_h_k, eval = doctype != "docx"}
+### generate (H, I, J, K) CD4+ T cells expressing IFNg and/or IL-2 BA.5 N peptides (C03A02), CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 N peptides (C04A02), CD4+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides (C03A11), CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides (C04A11), at M0. T-cell markers, first the 4 markers at M0 for Hybrid PLWH, 
+
+ds.ics.plot1.h_k <- ds.tmp.ics %>%
+  filter(antigen %in% c("BA.4-5 N", "Spike BA.4/5")) %>%
+  filter(VACCINE_f == "Hybrid" & visitno == "M0") %>%
+  mutate(VACCINE_f = paste0(VACCINE_f, " PLWH")) %>%
+  mutate(assay = paste0(cytokine, " ", antigen )) %>%
+  mutate(assay_lab = "% T cells",
+         fig_num = case_when(assay == "IFNg_OR_IL2 BA.4-5 N" ~ "1.H",
+                               assay == "IFNg_OR_IL2_OR_154 BA.4-5 N" ~ "1.I",
+                             assay == "IFNg_OR_IL2 Spike BA.4/5" ~ "1.J",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" ~ "1.K"))%>%
+  mutate(cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         assasy_labe = assay,
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")),
+         value = log10(pctpos_adj))%>%
+  mutate(panel = case_when(assay == "IFNg_OR_IL2 BA.4-5 N" ~ "M0 IFNg_OR_IL2 BA.4-5 N",
+                               assay == "IFNg_OR_IL2_OR_154 BA.4-5 N" ~ "M0 IFNg_OR_IL2_OR_154 BA.4-5 N",
+                             assay == "IFNg_OR_IL2 Spike BA.4/5" ~ "M0 IFNg_OR_IL2 Spike BA.4/5",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" ~ "M0 IFNg_OR_IL2_OR_154 Spike BA.4/5"))
+
+cohort_event = c("Cases", "Non-cases")
+
+
+panel_list = unique(ds.ics.plot1.h_k$assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.ics.plot1.h_k <- get_desc_by_group(ds.ics.plot1.h_k, groupby_vars1) 
+
+ violin1.h_k <- f_case_non_case_by_time_ics(
+    dat = ds.ics.plot1.h_k ,
+    assays = panel_list,
+    times = panel_list,
+    axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 30,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+    ylim = c(-2.5,1.2), 
+    y.lab.position = 0.6)
+
+
+ 
+```
+
+
+
+```{fig1_violin_l_m, eval = doctype != "docx"}
+### generate (L, M)  CD4+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides (C03A11), CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides (C04A11), at Peak. T-cell markers, second the 2 Spike markers at Peak for Hybrid PLWH , 
+
+ds.ics.plot1.l_m <- ds.tmp.ics %>%
+    filter(antigen %in% c("BA.4-5 N", "Spike BA.4/5")) %>%
+  filter(VACCINE_f == "Hybrid" & visitno == "M1" & antigen == "Spike BA.4/5" ) %>%
+  mutate(VACCINE_f = paste0(VACCINE_f, " PLWH")) %>%
+  mutate(assay = paste0(cytokine, " ", antigen )) %>%
+  mutate(assay_lab = "% T cells",
+         fig_num = case_when(assay == "IFNg_OR_IL2 Spike BA.4/5" ~ "1.L",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" ~ "1.M"))%>%
+  mutate(panel = "ICS assay", #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         assay_lab = "%% T cells",
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")),
+         value = log10(pctpos_adj))%>%
+  mutate(panel = case_when(assay == "IFNg_OR_IL2 Spike BA.4/5" ~ "Peak IFNg_OR_IL2 Spike BA.4/5",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" ~ "Peak IFNg_OR_IL2_OR_154 Spike BA.4/5"))
+
+cohort_event = c("Cases", "Non-cases")
+
+
+panel_list = unique(ds.ics.plot1.l_m$assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.ics.plot1.l_m <- get_desc_by_group(ds.ics.plot1.l_m, groupby_vars1) 
+
+
+
+ violin1.l_m <- f_case_non_case_by_time_ics(
+    dat = ds.ics.plot1.l_m ,
+    assays = panel_list,
+    times = panel_list,
+    axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 40,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+    ylim = c(-2.5,1.2), 
+    y.lab.position = 0.6)
+ 
+
+today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_fig1_violin_",today,".pdf"), onefile = T, width = 12.5, height = 10)
+
+violin1.a_c[[2]]
+violin1.a_c[[3]]
+violin1.a_c[[1]]
+violin1.d_e[[2]]
+violin1.d_e[[1]]
+violin1.f_g[[2]]
+violin1.f_g[[1]]
+violin1.h_k[[1]]
+violin1.h_k[[3]]
+violin1.h_k[[2]]
+violin1.h_k[[4]]
+violin1.l_m
+ dev.off()
+
+ 
+```
+
+
+```{figs6_violin_a_d, eval = doctype != "docx"}
+### generate (A, B, C, D) CD4+ T cells expressing IFNg and/or IL-2 BA.5 N peptides (C03A02), CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 N peptides (C04A02), CD4+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides (C03A11), CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides (C04A11), at M0. T-cell markers, first the 4 markers at M0 for Hybrid PLWH, 
+
+ics.pool.8 <- read.csv("../pdata/covpn3008_fcm08_CH_AP59_20231120_case-cohort_correlates/pdata/covpn3008_fcm08_CH_AP59_pool_p.csv") %>%
+  filter(cytokine %in% c('IFNg_OR_IL2', "IFNg_OR_IL2_OR_154") & 
+           antigen %in% c("Spike BA.4/5",
+                          "Spike Wuhan")  &
+           tcellsub == "8+")
+
+ics.resp.8 <- 
+  read.csv("../pdata/covpn3008_fcm08_CH_AP59_20231120_case-cohort_correlates/pdata/covpn3008_fcm08_CH_AP59_rpt_resp.csv") %>%
+  filter(cytokine %in% c('IFNg_OR_IL2', "IFNg_OR_IL2_OR_154") & 
+           antigen %in% c("BA.4-5 N",
+                          "Wuhan N")&
+           tcellsub == "8+")
+
+
+colnames(ics.pool.8) <- tolower(colnames(ics.pool.8))
+colnames(ics.resp.8) <- tolower(colnames(ics.resp.8))
+
+
+ics.8 <- bind_rows(
+  ics.pool.8 %>% 
+    dplyr::select(labid, ptid, visitno,
+           tcellsub, cytokine, antigen, pctpos_adj, response), 
+  ics.resp.8 %>% dplyr::select(labid, ptid, visitno,
+                      tcellsub, cytokine, antigen, pctpos_adj, response)
+  ) %>%
+  mutate(Subjectid = paste0("C3008-", ptid)) %>%
+  mutate(pctpos_adj = case_when(pctpos_adj <= 0.01 ~ 0.01,
+                                TRUE ~ pctpos_adj))
+         
+         
+ds.tmp.ics.8 <- left_join(ds.ics %>%
+                      mutate(EventIndPrimary1 = case_when(EventIndPrimary1 == 0 ~ "Non-cases",
+                                                           EventIndPrimary1 == 1 ~ "Cases")) %>%
+  select("Subjectid", "EventIndPrimary1", "VACCINE_f","AGRP2N") %>%
+    filter(AGRP2N %in% c(1, 2.1)),
+  ics.8) %>%
+  mutate(visitno = case_when(visitno == 2 ~ "M0",
+                             visitno == 3 | visitno == 4 ~ "Peak")) 
+
+
+
+ds.ics.plots6.a_f <- ds.tmp.ics.8 %>%
+  filter(antigen %in% c("BA.4-5 N", "Spike BA.4/5")) %>%
+  filter(VACCINE_f == "Hybrid") %>%
+  mutate(VACCINE_f = paste0(VACCINE_f, " \nPLWH (CD8+)", " at ",  visitno)) %>%
+  mutate(assay = paste0(cytokine, " ", antigen )) %>%
+  mutate(assay_lab = "% T cells",
+         fig_num = case_when(assay == "IFNg_OR_IL2 BA.4-5 N"  & visitno == "M0" ~ "s6.A",
+                               assay == "IFNg_OR_IL2_OR_154 BA.4-5 N" & visitno == "M0" ~ "s6.B",
+                             assay == "IFNg_OR_IL2 Spike BA.4/5" & visitno == "M0" ~ "s6.C",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" & visitno == "M0" ~ "s6.D",
+                             assay == "IFNg_OR_IL2 Spike BA.4/5" & visitno == "Peak" ~ "s6.E",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" & visitno == "Peak" ~ "s6.F"))%>%
+  filter(!is.na(fig_num)) %>%
+  mutate(panel = "ICS assay", #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         panel = case_when(assay == "IFNg_OR_IL2 BA.4-5 N"  & visitno == "M0" ~ "M0 IFNg_OR_IL2 BA.4-5 N",
+                               assay == "IFNg_OR_IL2_OR_154 BA.4-5 N" & visitno == "M0" ~ "M0 IFNg_OR_IL2_OR_154 \nBA.4-5 N",
+                             assay == "IFNg_OR_IL2 Spike BA.4/5" & visitno == "M0" ~ "M0 IFNg_OR_IL2 Spike BA.4/5",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" & visitno == "M0" ~ "M0 IFNg_OR_IL2_OR_154 \nSpike BA.4/5",
+                             assay == "IFNg_OR_IL2 Spike BA.4/5" & visitno == "Peak" ~ "Peak IFNg_OR_IL2 Spike BA.4/5",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" & visitno == "Peak" ~ "Peak IFNg_OR_IL2_OR_154 Spike BA.4/5"),
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")),
+         value = log10(pctpos_adj)) 
+cohort_event = c("Cases", "Non-cases")
+
+
+panel_list = unique(ds.ics.plots6.a_f$assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay_lab", "cohort_event", "visitno")
+
+ds.ics.plots6.a_f <- get_desc_by_group(ds.ics.plots6.a_f, groupby_vars1) 
+
+
+
+
+ violins6.a_d <- f_case_non_case_by_time_ics(
+    dat = subset(ds.ics.plots6.a_f, visitno == "M0") ,
+    assays = panel_list,
+    times = panel_list,
+    axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+ ylim = c(-2.5,1.2), 
+    y.lab.position = 0.6)
+
+
+ violins6.a_d
+ 
+ 
+ violins6.e_f <- f_case_non_case_by_time_ics(
+    dat = subset(ds.ics.plots6.a_f, visitno == "Peak" & antigen %in% c("Spike BA.4/5")) ,
+    assays = panel_list,
+    times = panel_list,
+   axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+ylim = c(-2.5,1), 
+             ybreaks = c(-2,-1, 0, 1),
+    y.lab.position = 0.6)
+ 
+ 
+ violins6.e_f
+ 
+ 
+ today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_figs6_violin_",today,".pdf"), onefile = T, width = 12.5, height = 10)
+
+violins6.a_d[[1]]
+violins6.a_d[[3]]
+violins6.a_d[[2]]
+violins6.a_d[[4]]
+violins6.e_f
+ dev.off()
+ 
+ 
+ 
+ 
+ 
+```
+
+
+
+
+
+```{figs8_violin_a_b, eval = doctype != "docx"}
+### generate figure s8 (A, B)  Same information as Figure 1 for the four Peak/M0 fold-rise markers for the Hybrid Group (IgG Spike BA.5 (A23), nAb-ID50 BA.4/5)
+
+ds.seru.plots8.a_b <- ds.tmp.seru %>%
+  filter(VACCINE_f == "Hybrid") %>%
+  select(Subjectid, BIGGMSDA23AU, M1IGGMSDA23AU, BBA45ID50, M1BA45ID50, EventIndPrimary1, VACCINE_f) %>%
+  mutate(fold.A23 = M1IGGMSDA23AU/BIGGMSDA23AU,
+         fold.BA45 = M1BA45ID50/BBA45ID50) %>%
+  select(Subjectid, EventIndPrimary1, VACCINE_f, fold.A23,fold.BA45) %>%
+ pivot_longer(cols = contains("fold"),
+               names_to = "assay",
+               values_to = "value")%>%
+  mutate(assay = case_when(assay == "fold.A23" ~ "IgG Spike BA.5",
+                           assay == "fold.BA45" ~ "nAb-ID50 BA.4/5")) %>%
+  mutate(panel = paste0(assay, " \nfold change (Peak/M0)"), #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")))%>%
+  mutate(assay_lab = paste0("AU/mL"),
+         fig_num = case_when(assay == "IgG Spike BA.5" ~ "s8.A",
+                             assay == "nAb-ID50 BA.4/5" ~ "s8.B")) %>%
+  mutate(value = log10(value))
+
+cohort_event = c("Cases", "Non-cases")
+
+
+panel_list = unique(ds.seru.plots8.a_b$assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plots8.a_b <- get_desc_by_group(ds.seru.plots8.a_b, groupby_vars1) 
+
+
+ violins8.a_b <- f_case_non_case_by_time_assay_noresp(
+    dat = ds.seru.plots8.a_b ,
+    assays = panel_list,
+    times = panel_list,
+   axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+   y.lab.position = 6.5)
+
+```
+
+
+
+
+```{figs8_violin_c_d, eval = doctype != "docx"}
+### generate figure s8 (C, D)  Same information as Figure 1 for the four Peak/M0 fold-rise markers for Hybrid PLWH Group (CD4+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides, CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides)
+
+ds.seru.plots8.c_d <- ds.tmp.ics %>%
+  filter(VACCINE_f == "Hybrid" & antigen == "Spike BA.4/5") %>%
+  mutate(VACCINE_f = paste0(VACCINE_f, " PLWH"))%>%
+  mutate(assay = paste0(cytokine, " ", antigen )) %>%
+  select(Subjectid, EventIndPrimary1, VACCINE_f, visitno, assay, pctpos_adj,vacc.response) %>%
+  pivot_wider(names_from =  visitno, values_from = pctpos_adj) %>%
+  mutate(value = M1/M0) %>%
+  mutate(assay_lab = paste0(assay, " (AU/mL)"),
+         fig_num = case_when(assay == "IFNg_OR_IL2 Spike BA.4/5" ~ "s8.C",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" ~ "s8.D"))%>%
+  mutate(panel = paste0(assay, " \nfold change (Peak/M0)"), #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         assasy_labe = "% T cells",
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")))%>%
+  mutate(value = log10(value))
+  
+ 
+
+cohort_event = c("Cases", "Non-cases")
+
+
+
+panel_list = unique(ds.seru.plots8.c_d$assay)
+
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plots8.c_d <- get_desc_by_group(ds.seru.plots8.c_d, groupby_vars1) 
+
+ violins8.c_d <- f_case_non_case_by_time_assay_noresp(
+    dat = ds.seru.plots8.c_d ,
+    assays = panel_list,
+    times = panel_list,
+   axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+   y.lab.position = 6.5)
+
+ 
+ 
+today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_figs8_violin_",today,".pdf"), onefile = T, width = 12.5, height = 10)
+
+violins8.a_b
+violins8.c_d
+ dev.off()
+ 
+ 
+ 
+
+ 
+```
+
+
+
+```{figs9_violin_a_b, eval = doctype != "docx"}
+### generate figure s9 (A, B)  Same information as Figure 1 for the four Peak/M0 fold-rise markers for Hybrid PLWH Group (CD8+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides, CD8+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides)
+
+ds.seru.plots9.a_b <- ds.tmp.ics.8 %>%
+  filter(VACCINE_f == "Hybrid" & antigen == "Spike BA.4/5") %>%
+  mutate(VACCINE_f = paste0(VACCINE_f, " \nPLWH", " fold change (CD8+)"))%>%
+  mutate(assay = paste0(cytokine, " ", antigen )) %>%
+  select(Subjectid, EventIndPrimary1, VACCINE_f, visitno, assay, pctpos_adj) %>%
+  pivot_wider(names_from =  visitno, values_from = pctpos_adj) %>%
+  mutate(value = Peak/M0) %>%
+  mutate(assay_lab = paste0(assay),
+         fig_num = case_when(assay == "IFNg_OR_IL2 Spike BA.4/5" ~ "s9.A",
+                             assay == "IFNg_OR_IL2_OR_154 Spike BA.4/5" ~ "s9.B"))%>%
+  mutate(panel = paste0(assay), #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         assay_lab = "% T cells",
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")),
+         value = log10(value))
+  
+ 
+
+cohort_event = c("Cases", "Non-cases")
+
+
+panel_list = unique(ds.seru.plots9.a_b$assay)
+
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plots9.a_b <- get_desc_by_group(ds.seru.plots9.a_b, groupby_vars1) 
+
+
+
+ violins9.a_b <- f_case_non_case_by_time_ics(
+    dat = ds.seru.plots9.a_b ,
+    assays = panel_list,
+    times = panel_list,
+   axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 20,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+   y.lab.position = 6.5)
+
+
+ 
+ 
+  today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_figs9_violin_",today,".pdf"), onefile = T, width = 12.5, height = 10)
+
+violins9.a_b
+ dev.off()
+ 
+ 
+ 
+```
+
+
+
+```{figs10_Spaghetti_a_b, eval = doctype != "docx"}
+### generate  figure s10 Spaghetti plots connecting M0 and Peak immune marker values of Hybrid Group participants for 
+### (A) IgG Spike BA.5 concentration, 
+###	(B) nAb ID50 BA.4/5 titer,  
+
+ds.seru.plots10.a_b <-  ds.seru.plot1 %>%
+  filter(assay %in% c("BBA45ID50",  "BIGGMSDA23AU", "M1BA45ID50",  "M1IGGMSDA23AU") ) %>%
+  mutate(assay = case_when( assay %in% c("BBA45ID50", "M1BA45ID50") ~ "nAb_ID50_BA_45",
+                            assay %in% c("BIGGMSDA23AU", "M1IGGMSDA23AU") ~ "IgG_Spike_BA5")) %>%
+  mutate(visitno = case_when(time %in% c("BBA45ID50",  "BIGGMSDA23AU") ~ "M0",
+                              time %in% c("M1BA45ID50",  "M1IGGMSDA23AU") ~ "Peak")) %>%
+  select(Subjectid, VACCINE_f, assay,value, visitno, response) %>%
+  mutate(fig_num = case_when(assay == "nAb_ID50_BA_45" ~ "10.B",
+                             assay == "IgG_Spike_BA5" ~ "10.A")) %>%
+  mutate(y.label = case_when(assay == "nAb_ID50_BA_45" ~ "ID50 titer (AU/ml)",
+                             assay == "IgG_Spike_BA5" ~ "IgG AU/ml"))
+ 
+
+time_var <- "visitno"
+assay_prim_rd <- "value"
+subjid_var <- "Subjectid"
+
+# agg_key and agg_key_names
+agg_key <- c("fig_num", "VACCINE_f", "assay","y.label")
+
+
+boxplots_all10_a_b <- hvtnFigures::pt_plot(dat = subset(ds.seru.plots10.a_b, VACCINE_f == "Hybrid" & !is.na(response)), 
+                         xvar=time_var, 
+                         yvar=assay_prim_rd, #cutoff.lower = 10,
+                         pts=subjid_var, 
+                         colby = time_var,lineby = subjid_var,
+                         resp="response",  pchby="response",
+                         pageby = agg_key,
+                         page.title.off = FALSE,
+                       page.title = paste0("Figure ", "%s", " Spaghetti plots connecting M0 and Peak immune marker values of \n", "%s", " Group participants for ", "%s"),
+                         x.title = " ", y.title = "%4$s",
+                         legend.title="",
+                         y.lb.major = expression(10^0, 10^2, 10^4, 10^6, 10^8), y.brk.major = seq(0,8,2),
+                         y.brk.minor = seq(0,8,2),y.log=FALSE, y.lims = c(0, 8),
+                         footnote.cex=8,
+                         legend.drop=FALSE, box.pos.only=TRUE, resp.plot = FALSE,
+                       dot.size = 2, theme.base.size = 25,
+                       page.title.cex = 20)
+
+
+
+
+
+
+
+```
+
+
+
+```{figs10_Spaghetti_c_d, eval = doctype != "docx"}
+### generate  figure s10 Spaghetti plots connecting M0 and Peak immune marker values of Hybrid Group participants for 
+### (C) CD4+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides, 
+### (D) CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides. For T-cell markers the Hybrid PLWH Group is assessed.
+
+ds.ics.plots10.c_d <-  ds.tmp.ics %>%
+  filter(antigen == "Spike BA.4/5") %>%
+  mutate(fig_num = case_when(cytokine == "IFNg_OR_IL2" ~ "10.C",
+                             cytokine == "IFNg_OR_IL2_OR_154" ~ "10.D")) %>%
+  mutate(value = log10(pctpos_adj))
+ 
+
+time_var <- "visitno"
+assay_prim_rd <- "value"
+subjid_var <- "Subjectid"
+
+# agg_key and agg_key_names
+agg_key <- c("fig_num", "VACCINE_f", "cytokine", "antigen")
+
+
+boxplots_all10_c_d <- hvtnFigures::pt_plot(dat = subset(ds.ics.plots10.c_d, VACCINE_f == "Hybrid" ), 
+                         xvar=time_var, 
+                         yvar=assay_prim_rd, #cutoff.lower = 10,
+                         pts=subjid_var, 
+                         colby = time_var,lineby = subjid_var,
+                         resp="response",  pchby="response",
+                         pageby = agg_key,
+                       page.title.off = FALSE,
+                       page.title = paste0("Figure ", "%s", " Spaghetti plots connecting M0 and Peak immune marker values of \n", "%s", " Group participants for ", "%s", " ", "%s"),
+                         x.title = " ", y.title = "%% CD4+ T-cells",
+                         legend.title="",
+                         y.lb.major = c('0.01%', '0.03%', '0.1%', '0.3%', '1%', '3%', '10%'), y.brk.major = log10(c(0.01, 0.03, 0.1, 0.3, 1, 3, 10)),
+                         y.log=FALSE, y.lims = c(-2.2, 1.2, 2),
+                         footnote.cex=8,
+                         legend.drop=FALSE, box.pos.only=TRUE, resp.plot = FALSE,
+                       dot.size = 2, theme.base.size = 25,
+                       page.title.cex = 20)
+
+
+
+
+
+  today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_figs10_spaghetti_",today,".pdf"), onefile = T, width = 15, height = 10)
+
+pt_draw(boxplots_all10_a_b)
+pt_draw(boxplots_all10_c_d)
+ dev.off()
+ 
+
+
+
+
+```
+
+
+
+
+
+
+```{figs11_Spaghetti_a_b, eval = doctype != "docx"}
+### generate  figure s11 Spaghetti plots connecting M0 and Peak immune marker values of Vaccine  Group participants for 
+### (A) IgG Spike BA.5 concentration, 
+###	(B) nAb ID50 BA.4/5 titer,  
+
+ds.seru.plots11.a_b <-  ds.seru.plot1 %>%
+  filter(assay %in% c("BBA45ID50",  "BIGGMSDA23AU", "M1BA45ID50",  "M1IGGMSDA23AU")) %>%
+  mutate(assay = case_when( assay %in% c("BBA45ID50", "M1BA45ID50") ~ "nAb_ID50_BA_45",
+                            assay %in% c("BIGGMSDA23AU", "M1IGGMSDA23AU") ~ "IgG_Spike_BA5")) %>%
+  mutate(visitno = case_when(time %in% c("BBA45ID50",  "BIGGMSDA23AU") ~ "M0",
+                              time %in% c("M1BA45ID50",  "M1IGGMSDA23AU") ~ "Peak")) %>%
+  select(Subjectid, VACCINE_f, assay,value, visitno, response) %>%
+  mutate(fig_num = case_when(assay == "nAb_ID50_BA_45" ~ "11.B",
+                             assay == "IgG_Spike_BA5" ~ "11.A"))%>%
+  mutate(y.label = case_when(assay == "nAb_ID50_BA_45" ~ "ID50 titer (AU/ml)",
+                             assay == "IgG_Spike_BA5" ~ "IgG AU/ml"))
+ 
+
+time_var <- "visitno"
+assay_prim_rd <- "value"
+subjid_var <- "Subjectid"
+
+# agg_key and agg_key_names
+agg_key <- c("fig_num", "VACCINE_f", "assay","y.label")
+
+
+boxplots_all11_a_b <- hvtnFigures::pt_plot(dat = subset(ds.seru.plots11.a_b, VACCINE_f == "Vaccine" & !is.na(response) ), 
+                         xvar=time_var, 
+                         yvar=assay_prim_rd, #cutoff.lower = 10,
+                         pts=subjid_var, 
+                         colby = time_var,lineby = subjid_var,
+                         resp="response",  pchby="response",
+                         pageby = agg_key,
+                       page.title.off = FALSE,
+                       page.title = paste0("Figure ", "%s", " Spaghetti plots connecting M0 and Peak immune marker values of \n", "%s", " Group participants for ", "%s"),
+                         x.title = " ", y.title = "%4$s",
+                         legend.title="",
+                         y.lb.major = expression(10^0, 10^2, 10^4, 10^6, 10^8), y.brk.major = seq(0,8,2),
+                         y.brk.minor = seq(0,8,2),y.log=FALSE, y.lims = c(0, 8),
+                         footnote.cex=8,
+                         legend.drop=FALSE, box.pos.only=TRUE, resp.plot = FALSE,
+                       dot.size = 2, theme.base.size = 25,
+                       page.title.cex = 20)
+
+
+
+
+
+
+```
+
+
+
+```{figs11_Spaghetti_c_d, eval = doctype != "docx"}
+### generate  figure s9 Spaghetti plots connecting M0 and Peak immune marker values of Vaccine  Group participants for 
+### (C) CD4+ T cells expressing IFNg and/or IL-2 BA.5 Spike peptides, 
+### (D) CD4+ T cells expressing IFNg and/or IL-2 and/or CD154 BA.5 Spike peptides. For T-cell markers the Vaccine  PLWH Group is assessed.
+
+ds.ics.plots11.c_d <-  ds.tmp.ics %>%
+  filter(antigen == "Spike BA.4/5")%>%
+  mutate(fig_num = case_when(cytokine == "IFNg_OR_IL2" ~ "11.C",
+                             cytokine == "IFNg_OR_IL2_OR_154" ~ "11.D"))%>%
+  mutate(value = log10(pctpos_adj))
+ 
+
+time_var <- "visitno"
+assay_prim_rd <- "value"
+subjid_var <- "Subjectid"
+
+# agg_key and agg_key_names
+agg_key <- c("fig_num", "VACCINE_f", "cytokine", "antigen")
+
+
+boxplots_all11_c_d <- hvtnFigures::pt_plot(dat = subset(ds.ics.plots11.c_d, VACCINE_f == "Vaccine" ), 
+                         xvar=time_var, 
+                         yvar=assay_prim_rd, #cutoff.lower = 10,
+                         pts=subjid_var, 
+                         colby = time_var,lineby = subjid_var,
+                         resp="response",  pchby="response",
+                         pageby = agg_key,
+                        page.title.off = FALSE,
+                       page.title = paste0("Figure ", "%s", " Spaghetti plots connecting M0 and Peak immune marker values of \n", "%s", " Group participants for ", "%s", " ", "%s"),
+                         x.title = " ", y.title = "%% CD4+ T-cells",
+                         legend.title="",
+                         y.lb.major = c('0.01%', '0.03%', '0.1%', '0.3%', '1%', '3%', '10%'), y.brk.major = log10(c(0.01, 0.03, 0.1, 0.3, 1, 3, 10)),
+                         y.log=FALSE, y.lims = c(-2.2, 1.2, 2),
+                         footnote.cex=8,
+                         legend.drop=FALSE, box.pos.only=TRUE, resp.plot = FALSE,
+                       dot.size = 3, theme.base.size = 25,
+                       page.title.cex = 20)
+
+
+ today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_figs11_spaghetti_",today,".pdf"), onefile = T, width = 15, height = 10)
+
+pt_draw(boxplots_all11_a_b)
+pt_draw(boxplots_all11_c_d)
+
+ dev.off()
+ 
+
+```
+
+
+```{nab_violin_ris, eval = doctype != "docx"}
+# source("../macro/cor_graphics_functions_partA.R")
+ds.nab.ris <- ds %>%
+  filter(ph2.m1.sera == 1 & IMMFL == "Y") 
+
+
+#### read nab data 
+
+nab.resp <- read.csv("../pdata/COVPN3008_NAB07_SA_20240705/pdata/COVPN3008_NAB07_SA_resp_long_20240711.csv") %>%
+  filter(isolate == "BA.4/5" & aval_cd == "response_ID50" & visitno %in% c(2,3,4)) %>%
+  mutate(Subjectid = paste0("C3008-", ptid),
+         visitno = case_when(visitno == 2 ~ "M0",
+                             visitno ==3 |visitno ==4 ~ "M1"),
+         response = aval) %>%
+  select("Subjectid", "visitno", "response") 
+
+ds.nab.ris <- ds.nab.ris %>%
+  select("Subjectid", "BBA45ID50", "M1BA45ID50", "AGRP2N") %>%
+  rename(M0 = BBA45ID50,
+         M1 = M1BA45ID50 ) %>%
+  pivot_longer(cols = starts_with("M"),
+               names_to = "visitno",
+               values_to = "value")
+
+
+ds.tmp.nab <- left_join(ds.nab.ris,nab.resp) %>%
+  mutate(cohort_event = AGRP2N,
+         time = case_when(visitno == "M0" ~ "M0",
+                          visitno == "M1" ~ "Peak"),
+         panel = "nAb ID50 BA.4/5",
+         assay = "nAb ID50 BA.4/5",
+         value = log10(value))%>%
+  mutate(cohort_event = factor(cohort_event, levels = c("1", "3",  "2.1" , "4.1")))
+
+
+
+cohort_event = c("1", "2.1", "3", "4.1")
+ 
+
+
+panel_list = unique(ds.tmp.nab$assay)
+set_label = c("M0", "Peak")
+
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "time","cohort_event")
+
+ds.tmp.nab.plot <- get_desc_by_group(ds.tmp.nab, groupby_vars1) 
+
+
+
+ violin.nab <- f_case_non_case_by_time_assay_nab(
+    dat = ds.tmp.nab.plot ,
+    assays = panel_list,
+    times = set_label,
+   axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 13,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(time),
+    pointby = "cohort_col",
+    nrow=1,
+    ncol=6,
+    label_angle=0,
+   y.lab.position = 6.5,
+   y.label.text = "ID50 Titer (AU/mL)")
+ 
+
+ 
+ 
+ 
+ 
+  today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_nab_violin_RIS",today,".pdf"), onefile = T, width = 15, height = 10)
+
+violin.nab
+ dev.off()
+ 
+```
+
+
+
+
+```{bama_violin_ris, eval = doctype != "docx"}
+
+ds.bama.ris <- ds %>%
+  filter(ph2.m1.sera == 1 & IMMFL == "Y") 
+
+
+
+ds.tmp.bama <- left_join(ds.bama.ris %>%
+                      mutate(EventIndPrimary1 = case_when(EventIndPrimary1 == 0 ~ "Non-cases",
+                                                           EventIndPrimary1 == 1 ~ "Cases")) %>%
+  select("Subjectid", "BIGGMSDA15AU", "BIGGMSDA23AU", "M1IGGMSDA15AU", "M1IGGMSDA23AU", "EventIndPrimary1", "AGRP2N"),
+  bama.resp) %>%
+  mutate(BA23AU.resp = as.numeric(BA23AU.resp),
+         M1A23AU.resp = as.numeric(M1A23AU.resp),
+         BA15AU.resp = as.numeric(BA15AU.resp),
+         M1A15AU.resp = as.numeric(M1A15AU.resp))
+
+
+  
+ds.bama.plot.resp <- ds.tmp.bama %>% 
+  select(Subjectid, EventIndPrimary1, BA15AU.resp, BA23AU.resp, M1A15AU.resp, M1A23AU.resp,AGRP2N ) %>%
+  pivot_longer(cols = contains("resp"),
+               names_to = "assay",
+               values_to = "response") %>%
+  mutate(assay = case_when(assay == "BA15AU.resp" ~ "BIGGMSDA15AU",
+                             assay == "BA23AU.resp" ~ "BIGGMSDA23AU",
+                             assay == "M1A15AU.resp" ~ "M1IGGMSDA15AU",
+                             assay == "M1A23AU.resp" ~ "M1IGGMSDA23AU"))
+  
+  
+ds.bama.plot.value <- ds.tmp.bama %>% 
+  select(Subjectid, EventIndPrimary1, BIGGMSDA15AU, BIGGMSDA23AU, M1IGGMSDA15AU, M1IGGMSDA23AU) %>%
+  pivot_longer(cols = BIGGMSDA15AU:M1IGGMSDA23AU ,
+               names_to = "assay",
+               values_to = "value") 
+  
+  
+ds.bama.plot1 <- ds.bama.plot.resp %>% full_join(., ds.bama.plot.value)%>%
+  mutate(cohort_event = AGRP2N,
+         time = case_when(assay %in% c("BIGGMSDA15AU","BIGGMSDA23AU") ~ "M0",
+                          assay %in% c("M1IGGMSDA15AU","M1IGGMSDA23AU") ~ "Peak"),
+         panel =  case_when(assay %in% c("BIGGMSDA15AU","M1IGGMSDA15AU") ~ "IgG N Index",
+                          assay %in% c("BIGGMSDA23AU","M1IGGMSDA23AU") ~ "IgG Spike BA.5"),
+         assay= case_when(assay %in% c("BIGGMSDA15AU","M1IGGMSDA15AU") ~ "IgG N Index",
+                          assay %in% c("BIGGMSDA23AU","M1IGGMSDA23AU") ~ "IgG Spike BA.5"),
+         value = log10(value))%>%
+  mutate(cohort_event = factor(cohort_event, levels = c("1", "3",  "2.1" , "4.1")))
+  
+  
+  
+
+cohort_event = c("1", "2.1", "3", "4.1")
+ 
+
+
+panel_list = unique(ds.bama.plot1$assay)
+set_label = c("M0", "Peak")
+
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "time","cohort_event")
+
+ds.bama.plot1 <- get_desc_by_group(ds.bama.plot1, groupby_vars1) 
+
+
+
+ violin.bama <- f_case_non_case_by_time_assay_nab(
+    dat = ds.bama.plot1 ,
+    assays = panel_list,
+    times = set_label,
+   axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 20,
+    panel.text.size = 13,
+    axis.title.size = 25,
+    facet.y.var = vars(), 
+    facet.x.var = vars(time),
+    pointby = "cohort_col",
+    nrow=1,
+    ncol=6,
+    label_angle=0,
+   y.lab.position = 7,
+   y.label.text = "IgG AU/mL")
+ 
+
+ 
+ 
+ 
+   today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_bama_violin_RIS",today,".pdf"), onefile = T, width = 15, height = 10)
+
+ violin.bama
+ dev.off()
+ 
+```
+
+
+```{fig_spp_violin_iggs, eval = doctype != "docx"}
+#########
+#  you need to make some new panels, for
+# IgG Spike (Index strain)
+# CD4 T cells IFNg and/or IL-2 Index strain peptides
+# CD4 T cells IFNg and/or IL-2 and/or CD154 Index strain
+# nAb ID50 D614G/Reference strain 
+
+
+bama.resp.a16 <-  read.csv("../pdata/covpn3008_bammsd_20240206/pdata/CoVPN3008_BAMMSD_20240405_IQC_IgG.csv") %>%
+  filter(analyte %in% c("SARS-CoV-2 Spike")  & aval_cd == "response") %>%
+  filter(visitno %in% c(2, 3, 4)) %>%
+  mutate(Subjectid = paste0("C3008-", ptid),
+         visitno = case_when(visitno == 2 ~ "response_M0",
+                             visitno ==3 |visitno ==4 ~ "response_M1")) %>%
+  select("Subjectid", "visitno", "analyte", "aval") %>%
+  pivot_wider(names_from = visitno, values_from = aval) %>%
+  mutate(antigen.lab = "A16" )
+
+bama.au.a16 <-  read.csv("../adata/COVID_bama_resp.csv") %>%
+  filter(antigen.lab == "A16" ) %>%
+    filter(visitno %in% c(2, 3, 4)) %>%
+  mutate(Subjectid = paste0("C3008-", ptid),
+         visitno = case_when(visitno == 2 ~ "obsconc_AU_tuc_M0",
+                             visitno ==3 |visitno ==4 ~ "obsconc_AU_tuc_M1")) %>%
+  select(Subjectid, antigen.lab, obsconc_AU_tuc, isotype, concentration_units,visitno, pos_cut) %>%
+  pivot_wider(names_from = visitno, values_from = obsconc_AU_tuc)
+
+
+bama.a16 <- bama.resp.a16 %>% full_join(bama.au.a16) %>%
+  select(-analyte)
+
+
+##### 3.If the M0 = neg, Peak resp = 1 (response by lab) ~ resp =1 at Peak
+##### If the M0 = neg, Peak resp = 0 (by lab) ~ resp = 0 at Peak
+##### If M0 = pos and Peak resp = 1 and need to 4 folder increase ~ resp at Peak =1
+##### If M0 = pos ~ Peak resp = 1 and change less 4 fold ~ resp at Peak = 0 
+
+bama.a16 <- bama.a16 %>%
+  mutate(au_ratio = obsconc_AU_tuc_M1/obsconc_AU_tuc_M0) %>%
+  mutate(response_M1_adj = case_when(response_M0 == 0 & response_M1 == 0 ~ 0,
+                                     response_M0 == 0 & response_M1 == 1 ~ 1,
+                                     response_M0 == 1 & response_M1 == 0 ~ 0,
+                                     response_M0 == 1 & response_M1 == 1 & au_ratio >= 4 ~ 1,
+                                     response_M0 == 1 & response_M1 == 1 & au_ratio < 4 ~ 0)) %>%
+  select(Subjectid, antigen.lab, response_M0, response_M1_adj) %>%
+  pivot_wider(names_from = antigen.lab, values_from = c(response_M0, response_M1_adj)) %>%
+  rename(BA16AU.resp  = response_M0_A16,
+         M1A16AU.resp = response_M1_adj_A16)
+
+
+
+# #### read nab data 
+# 
+# nab.resp <- read.csv("../pdata/COVPN3008_NAB07_SA_20240705/pdata/COVPN3008_NAB07_SA_resp_long_20240711.csv") %>%
+#   filter(isolate == "BA.4/5" & aval_cd == "response_ID50" & visitno %in% c(2,3,4)) %>%
+#   mutate(Subjectid = paste0("C3008-", ptid),
+#          visitno = case_when(visitno == 2 ~ "BBA45ID50.resp",
+#                              visitno ==3 |visitno ==4 ~ "M1BA45ID50.resp")) %>%
+#   select("Subjectid", "visitno", "aval") %>%
+#   pivot_wider(names_from = visitno, values_from = aval)
+
+
+ds.tmp.seru.a16 <- left_join(ds.seru %>%
+                      mutate(EventIndPrimary1 = case_when(EventIndPrimary1 == 0 ~ "Non-cases",
+                                                           EventIndPrimary1 == 1 ~ "Cases")) %>%
+  select("Subjectid", "BIGGMSDA15AU", "BIGGMSDA16AU", "M1IGGMSDA16AU",  "EventIndPrimary1", "VACCINE_f"),
+  bama.a16) %>%
+  mutate(BA16AU.resp = as.numeric(BA16AU.resp),
+         M1A16AU.resp = as.numeric(M1A16AU.resp))
+
+
+ds.seru.plot.resp.a16 <- ds.tmp.seru.a16 %>% 
+  select(Subjectid, EventIndPrimary1, VACCINE_f, BA16AU.resp, M1A16AU.resp ) %>%
+  pivot_longer(cols = contains("resp"),
+               names_to = "assay",
+               values_to = "response") %>%
+  mutate(assay = case_when(assay == "BA16AU.resp" ~ "BIGGMSDA16AU",
+                             assay == "M1A16AU.resp" ~ "M1IGGMSDA16AU"))
+  
+  
+ds.seru.plot.value.a16 <- ds.tmp.seru.a16 %>% 
+  select(Subjectid, EventIndPrimary1, VACCINE_f, BIGGMSDA16AU, M1IGGMSDA16AU) %>%
+  pivot_longer(cols = BIGGMSDA16AU:M1IGGMSDA16AU ,
+               names_to = "assay",
+               values_to = "value") 
+  
+  
+ds.seru.plot.a16 <- ds.seru.plot.resp.a16 %>% full_join(., ds.seru.plot.value.a16)%>%
+  mutate(panel = "Serum assay", #only for title use
+         cohort_event = EventIndPrimary1, # cohort_event is the the x-axis group variable
+         time = assay,
+         cohort_event = factor(cohort_event, levels = c("Cases", "Non-cases")),
+         value = log10(value))
+
+cohort_event = c("Cases", "Non-cases")
+
+
+### generate (A) IgG Spike (Index strain) M0 Hybrid
+ds.seru.plot.a16 <- ds.seru.plot.a16 %>%
+  filter(VACCINE_f == "Hybrid") %>%
+  filter(assay %in% c("BIGGMSDA16AU")) %>%
+  mutate(assay_lab = case_when(assay == "BIGGMSDA16AU" ~ "AU/mL"),
+         fig_num = case_when(  assay == "BIGGMSDA16AU" ~ "supp7.A")) %>%
+  mutate(panel = case_when(assay == "BIGGMSDA16AU" ~ "M0 IgG Spike (Index strain)"),
+         assay = factor(assay, levels = c("BIGGMSDA16AU"))) %>%
+  arrange(assay)
+
+panel_list = unique(ds.seru.plot.a16$assay)
+
+## group by value for figure 1
+groupby_vars1 = c("assay", "cohort_event")
+
+ds.seru.plot.a16 <- get_desc_by_group(ds.seru.plot.a16, groupby_vars1) 
+
+
+
+ violinsupp7.a <- f_case_non_case_by_time_assay(
+    dat = ds.seru.plot.a16 ,
+    assays = panel_list,
+    times = panel_list,
+    axis.x.text.size = 40,
+    strip.x.text.size = 40,
+    strip.y.text.size = 40,
+    panel.text.size = 20,
+    axis.title.size = 30,
+    facet.y.var = vars(), 
+    facet.x.var = vars(),
+    pointby = "cohort_col",
+    nrow=2,
+    ncol=2,
+    label_angle=0,
+    y.lab.position = 7)
+ 
+ 
+ violinsupp7.a
+
+ 
+```
+
+
+
+
+```{fig_cor_cd4, eval = doctype != "docx"}
+source("../macro/my_pairs.R")
+
+
+
+if(T){#Extra Functions
+  
+  ###Code copied from PerformanceAnalytics:::chart.Correlation
+  ###The original function has the x-axis, y-axis labels on the histgrams which are hard to read
+  ###Modified to add labels on x-axis and y-axis 
+  
+  panel.cor <- function(x, y, digits = 2, prefix = "", use = "pairwise.complete.obs", 
+                        method="spearman", cex.cor, ...) {
+    usr <- par("usr")
+    on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- cor(x, y, use = use, method = method)
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste(prefix, txt, sep = "")
+    if (missing(cex.cor)) 
+      cex <- 0.8/strwidth(txt)
+    test <- cor.test(x, y, method = method)
+    Signif <- symnum(test$p.value, corr = FALSE, na = FALSE, 
+                     cutpoints = c(0, 0.001, 0.01, 0.05, 0.1, 1), symbols = c("***", 
+                                                                              "**", "*", ".", " "))
+    text(0.5, 0.5, txt, cex = cex )
+    text(0.8, 0.8, Signif, cex = cex, col = 2)
+  }
+  
+
+  hist.panel = function(x, ...) {
+    par(new = TRUE)
+    hist(x, col = "light gray", probability = TRUE, axes = FALSE, 
+         main = "", breaks = "FD")
+
+    lines(density(x, na.rm = TRUE), col = "red", lwd = 1)
+    rug(x)
+  }
+  
+  panel.smooth =function (x, y, col = par("col"), bg = NA, pch = par("pch"), 
+                          cex = 1, col.smooth = "red", span = 2/3, iter = 3, ...) {
+    points(x, y, pch = pch, col = col, bg = bg, cex = cex)
+    
+    ok <- is.finite(x) & is.finite(y)
+    if (any(ok)) 
+      lines(stats::lowess(x[ok], y[ok], f = span, iter = iter), 
+            col = col.smooth, ...)
+    
+  }
+  
+  draw.plot=function(vars,lgnd,title,protocol){  
+
+    varsub=as.vector(unlist(
+      sapply(vars,function(x)names(allassay_sub[grep(x,names(allassay_sub))]))
+      ))
+    
+    df=allassay_sub[,varsub]
+    
+    labels=varsub
+    
+    pairs(df, gap = 0, lower.panel = panel.smooth, upper.panel = panel.cor, pch=19,
+          diag.panel = hist.panel,text.panel= NULL ,oma=c(16,16,8,4), ylim = c(-2, 1.2), xlim = c(-2, 1.2))
+    
+    title(paste0("CoVPN ",protocol," Correlation Analysis: ",title))
+    vars.n=sapply(vars,function(x)length(grep(x,names(allassay_sub))))
+    cols=rep.int(c("black","black","black","black","black","black","black","black")[1:length(vars)],vars.n)
+    
+    start.x=par('usr')[1]+(par('usr')[2]-par('usr')[1])/11.5*1.7
+    end.x=par('usr')[2]-(par('usr')[2]-par('usr')[1])/11.5*.5
+    start.x1=start.x+(end.x-start.x)/2/ncol(df)
+    end.x1=end.x-(end.x-start.x)/2/ncol(df)
+    fix.y=par('usr')[3]+(par('usr')[4]-par('usr')[3])/8.5*ifelse(ncol(df)<3,2.2,1.8)*0.8
+    
+    
+    start.y=par('usr')[4]-(par('usr')[4]-par('usr')[3])/8.5*1.05
+    end.y=par('usr')[3]+(par('usr')[4]-par('usr')[3])/8.5*1.7
+    start.y1=start.y+(end.y-start.y)/2/ncol(df)
+    end.y1=end.y-(end.y-start.y)/2/ncol(df)
+    fix.x=par('usr')[1]+(par('usr')[2]-par('usr')[1])/11.5*ifelse(ncol(df)<3,2.2,1.8)*0.7
+    
+    par(font=2)
+    text(x=seq(start.x1,end.x1,length.out=ncol(df)),y=fix.y,
+         col=cols,xpd=T,cex=.7,adj=0,srt=-60,
+         labels=labels)
+    
+    text(y=seq(start.y1,end.y1,length.out=ncol(df)),x=fix.x,
+         col=cols,xpd=T,cex=.7,adj=1,
+         labels=labels)
+    
+    par(xpd=T)
+
+    legend(x=par('usr')[1]+(par('usr')[2]-par('usr')[1])/11.5*0.5,
+           y=par('usr')[3]+(par('usr')[4]-par('usr')[3])/19*(1+.15*length(vars)),
+           ncol=3,cex=.85,bty="n",text.width=rep.int(max(strwidth(lgnd)),(1+length(lgnd))),
+           c("0 *** 0.001 ** 0.01 * 0.05 \u00B7"),
+           fill=c("red"),
+           border=NA)
+    
+    par(font=1)
+  }
+  
+}# End of Extra Functions
+
+
+
+ds.tmp.ics.wide <- ds.tmp.ics %>% 
+  mutate(antigen = case_when(antigen == "Spike Wuhan" ~ "Spike Index",
+                             antigen == "Wuhan N" ~ "N Index",
+                             TRUE ~ antigen)) %>%
+  mutate(assay = paste0(cytokine, "\n", antigen, " CD4+")) %>%
+  mutate(value = log10(pctpos_adj)) %>%
+  select(-cytokine, -antigen,  - response, - vacc.response, -pctpos_adj, -tcellsub) %>%
+  pivot_wider(names_from = assay,
+              values_from = value)
+
+ds.tmp.ics.wide.8 <- ds.tmp.ics.8 %>% 
+    mutate(value = log10(pctpos_adj)) %>%
+    mutate(antigen = case_when(antigen == "Spike Wuhan" ~ "Spike Index",
+                             antigen == "Wuhan N" ~ "N Index",
+                             TRUE ~ antigen)) %>%
+  mutate(assay = paste0(cytokine, "\n", antigen, " CD8+")) %>%
+  select(-cytokine, -antigen,- response, -pctpos_adj, -tcellsub) %>%
+  pivot_wider(names_from = assay,
+              values_from = value) %>%
+  mutate(visitno = case_when(visitno == "M0" ~ "M0",
+                             visitno == "Peak" ~ "M1"))
+
+
+ds.tmp.ics.wide.all <- ds.tmp.ics.wide %>%
+  full_join(., ds.tmp.ics.wide.8, by = join_by(Subjectid, EventIndPrimary1, VACCINE_f, AGRP2N, labid, ptid, visitno)) %>%
+  filter(VACCINE_f == "Hybrid")
+
+
+   today <- format(Sys.Date(), "%m%d%Y")
+cairo_pdf(paste0("/trials/covpn/p3008/analysis/manuscripts/PartACorrelatesManuscript/report/CoVPN3008_ICS_corr_",today,".pdf"), onefile = T, width = 15, height = 10)
+
+
+allassay_sub <- ds.tmp.ics.wide.all %>%
+  filter(visitno =="M0")
+
+
+draw.plot(vars=c("IFNg_OR_IL2\nSpike BA.4/5 CD4+" , "IFNg_OR_IL2_OR_154\nSpike BA.4/5 CD4+", "IFNg_OR_IL2\nSpike Index CD4+",
+                 "IFNg_OR_IL2_OR_154\nSpike Index CD4+", "IFNg_OR_IL2\nBA.4-5 N CD4+", "IFNg_OR_IL2_OR_154\nBA.4-5 N CD4+",
+                 "IFNg_OR_IL2\nN Index CD4+", "IFNg_OR_IL2_OR_154\nN Index CD4+", "IFNg_OR_IL2\nSpike BA.4/5 CD8+",
+                 "IFNg_OR_IL2\nSpike Index CD8+", "IFNg_OR_IL2\nBA.4-5 N CD8+", "IFNg_OR_IL2\nN Index CD8+"),
+          lgnd=c("IFNg_OR_IL2\nSpike BA.4/5 CD4+" , "IFNg_OR_IL2_OR_154\nSpike BA.4/5 CD4+", "IFNg_OR_IL2\nSpike Index CD4+",
+                 "IFNg_OR_IL2_OR_154\nSpike Index CD4+", "IFNg_OR_IL2\nBA.4-5 N CD4+", "IFNg_OR_IL2_OR_154\nBA.4-5 N CD4+",
+                 "IFNg_OR_IL2\nN Index CD4+", "IFNg_OR_IL2_OR_154\nN Index CD4+", "IFNg_OR_IL2\nSpike BA.4/5 CD8+",
+                 "IFNg_OR_IL2\nSpike Index CD8+", "IFNg_OR_IL2\nBA.4-5 N CD8+", "IFNg_OR_IL2\nN Index CD8+") ,
+          protocol=3008,title=paste0("M0, Cohort: Hybrid PLWH"))
+
+
+
+allassay_sub <- ds.tmp.ics.wide.all %>%
+  filter(visitno =="M1")
+
+
+draw.plot(vars=c("IFNg_OR_IL2\nSpike BA.4/5 CD4+" , "IFNg_OR_IL2_OR_154\nSpike BA.4/5 CD4+", "IFNg_OR_IL2\nSpike Index CD4+",
+                 "IFNg_OR_IL2_OR_154\nSpike Index CD4+", "IFNg_OR_IL2\nBA.4-5 N CD4+", "IFNg_OR_IL2_OR_154\nBA.4-5 N CD4+",
+                 "IFNg_OR_IL2\nN Index CD4+", "IFNg_OR_IL2_OR_154\nN Index CD4+", "IFNg_OR_IL2\nSpike BA.4/5 CD8+",
+                 "IFNg_OR_IL2\nSpike Index CD8+", "IFNg_OR_IL2\nBA.4-5 N CD8+", "IFNg_OR_IL2\nN Index CD8+"),
+          lgnd=c("IFNg_OR_IL2\nSpike BA.4/5 CD4+" , "IFNg_OR_IL2_OR_154\nSpike BA.4/5 CD4+", "IFNg_OR_IL2\nSpike Index CD4+",
+                 "IFNg_OR_IL2_OR_154\nSpike Index CD4+", "IFNg_OR_IL2\nBA.4-5 N CD4+", "IFNg_OR_IL2_OR_154\nBA.4-5 N CD4+",
+                 "IFNg_OR_IL2\nN Index CD4+", "IFNg_OR_IL2_OR_154\nN Index CD4+", "IFNg_OR_IL2\nSpike BA.4/5 CD8+",
+                 "IFNg_OR_IL2\nSpike Index CD8+", "IFNg_OR_IL2\nBA.4-5 N CD8+", "IFNg_OR_IL2\nN Index CD8+") ,
+          protocol=3008,title=paste0("M1, Cohort: Hybrid PLWH"))
+
+
+
+ dev.off()
+ 
+
+
+```
+
+
+
+
+
+```{fig_cor_cd8, eval = doctype != "docx"}
+
+
+
+allassay_sub <- ds.tmp.ics.wide.8  filter(visitno == "M0") %>%
+
+
+draw.plot(vars=c("IFNg_OR_IL2 Spike BA.4/5", "IFNg_OR_IL2 Spike Wuhan",  "IFNg_OR_IL2 BA.4-5 N", "IFNg_OR_IL2 Wuhan N"),
+          lgnd=c("IFNg_OR_IL2 Spike BA.4/5", "IFNg_OR_IL2 Spike Wuhan",  "IFNg_OR_IL2 BA.4-5 N", "IFNg_OR_IL2 Wuhan N") ,
+          protocol=3008,title=paste0(""))
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
