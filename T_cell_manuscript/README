@@ -1,42 +1,81 @@
-This folder hosts RMD files necessary to reproduce the ICS and antibody correlates analysis in CoVPN 3008 Study.
+The Github repository CoVPN3008/T_cell_manuscript at master · CoVPN/CoVPN3008 hosts RMD files necessary to reproduce the ICS and antibody correlates analysis in the CoVPN 3008 Study. The RMD files listed below are ready to use with a single click, provided that the processed dataset is placed in the same directory. To access the processed dataset, permission will have to be requested from the HVTN and the Statistical Center for HIV/AIDS Research & Prevention (SCHARP), through the author contact Bo Zhang. 
 
-The RMD files listed below are ready to use with a single click, provided that the processed dataset is placed in the same directory. 
-To access the processed dataset, permission will have to be requested from HVTN and Statistical Center for HIV/AIDS Research & Prevention (SCHARP).
+ 
 
+The RMD file ICS_IFN-g_and-or_IL-2_Fig_2-3.Rmd reproduces the following results: 
 
-The RMD file coxph_Fig4.Rmd reproduces the following results:
-  Univaraite Cox regression results in Figure 4 of the main article.
+  % of T cells expressing IFN-g and/or IL-2 in Figures 2, 3 and Supplementary Figures 2, 3, and 4. 
 
-The RMD file coxph_Fig5.Rmd reproduces the following results:
-  Bivariate Cox regression results in Figure 5 of the main article.
+ 
 
-The RMD file ICS_ControlledRisk_NP_Fig4.Rmd reproduces the following results:
-  Controlled risk curves in the Figure 4 of the main article.
+The RMD file ICS_EDA-COMPASS.Rmd reproduces the following results:   
 
-The RMD file ICS_threshold_analysis_Fig4.Rmd reproduces the following results:
-  Nonparametric marker-thresholded correlate of relative risk curves in the Figure 4 and Supplemental Figure 15.
+   COMPASS scores in Figure 3 and Supplementary Figure 3. 
 
-The RMD file Plot_two_markers_case_noncase_Fig5.Rmd reproduces the following results:
-  The bivariate marker plot in the Figure 5 of the main article.
+ 
 
-The RMD file CD4_cluster_marker_SuppTbl5_and6.Rmd reproduces the following results:
-  Univaraite Cox regression results in Supplemental Tables 5 and 6 in the Supplement.
+The RMD file coxph_Fig4.Rmd reproduces the following results: 
 
-The RMD file CD8_cluster_marker_SuppTbl5_and6.Rmd reproduces the following results:
-  Univaraite Cox regression results in Supplemental Tables 7 and 8 in the Supplement.
+  Univariate Cox regression results in Figure 4. 
 
-The RMD file ICS_ControlledRisk_NP_SuppFig14.Rmd reproduces the following results:
-  Controlled risk curves in the Supplemental Figure 14 of the supplement.
+ 
 
-The RMD file ICS_IFN-g_and-or_IL-2_Fig_2-3.Rmd reproduces the following results:
-  % of T cells expressing IFN-g and/or IL-2 in Figures 2, 3 and Supplemental Figures 2, 3 of the main article.
+The RMD file ICS_ControlledRisk_NP_Fig4.Rmd reproduces the following results: 
 
-The RMD file ICS_CC_EDA-COMPASS_CD4+T.Rmd reproduces all figures related to COMPASS in the case/non-case cohort.
+  Controlled risk curves in Figure 4. 
 
-The RMD file IICS_EDA-COMPASS.Rmd reproduces the following results:  
-   COMPASS scores in Figure 3 and Supplemental Figure 3 of the main article.
+ 
 
-The RMD file ICS_High-Dimensional-ICS-Analysis_CD4+T.Rmd reproduces all figures related to the clustering.
+The RMD file ICS_threshold_analysis_Fig4.Rmd reproduces the following results: 
 
+ Nonparametric marker-thresholded correlate of relative risk curves in Figure 4. 
+
+ 
+
+The RMD file coxph_Fig5.Rmd reproduces the following results: 
+
+  Bivariate Cox regression results in Figure 5. 
+
+ 
+
+The RMD file Plot_two_markers_case_noncase_Fig5.Rmd reproduces the following results: 
+
+  The bivariate marker plot in Figure 5. 
+
+ 
+
+The RMD file ICS_ControlledRisk_NP_SuppFig14.Rmd reproduces the following results: 
+
+  Controlled risk curves in Supplementary Figure 14. 
+
+ 
+
+The RMD file ICS_threshold_analysis_Fig4.Rmd reproduces the following results: 
+
+Nonparametric marker-thresholded correlate of relative risk curves: Supplementary Figure 15.  
+
+ 
+
+The RMD file ICS_CC_EDA-COMPASS_CD4+T.Rmd reproduces the following results:  
+
+COMPASS results in the case/non-case cohort in Supplementary Figure 16.  
+
+ 
+The RMD file ICS_High-Dimensional-ICS-Analysis_CD4+T.Rmd reproduces the following results:  
+
+Leiden clustering results in Supplementary Figure 17.  
+
+ 
 The RMD file cohort_report.Rmd reproduces the demographics table in Supplementary Table 3 and Table 1. 
 
+ 
+
+The RMD file CD4_cluster_marker_SuppTbl5_and6.Rmd reproduces the following results: 
+
+  Univariate Cox regression results in Supplementary Tables 6 and 7. 
+
+ 
+
+The RMD file CD8_cluster_marker_SuppTbl5_and6.Rmd reproduces the following results: 
+
+  Univariate Cox regression results in Supplementary Tables 8 and 9. 
